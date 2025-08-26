@@ -26,78 +26,88 @@ public class VertexEnumerator {
         }
     }
 
+    private EnumStats lastStats = null;
+    public EnumStats getLastStats() { return lastStats; }
+
     private Polyhedron enumerateFromH(Polyhedron hRep) {
         final int m = hRep.getRowCount();
         final int n = hRep.getColCount();
         final int d = n - 1;
 
+        lastStats = new EnumStats();
+
         if (d <= 0 || m < d) {
             return new Polyhedron(Polyhedron.Type.V, 0, n, /*integerData*/ false, new Matrix(0, n));
         }
 
-        // Copy H into array form
+        // copy H to array
         Matrix Mm = hRep.getMatrix();
         Fraction[][] H = new Fraction[m][n];
         for (int i = 0; i < m; i++) for (int j = 0; j < n; j++) H[i][j] = Mm.get(i, j);
 
-        // Reverse-search traversal over feasible bases (lrs-like order on simple inputs)
-        List<Fraction[]> verts;
-        try {
-            verts = new ReverseSearchEnumerator(H).enumerateVertices();
-        } catch (IllegalArgumentException e) {
-            // Fallback: no vertices (degenerate)
-            verts = new ArrayList<>();
-        }
+        // reverse-search traversal
+        ReverseSearchEnumerator.Result rs = new ReverseSearchEnumerator(H).run();
+        List<Fraction[]> verts = rs.vertices;
 
-        // ---- lrs-like ordering for common cases ----
-        final Fraction ZERO = verts.isEmpty() ? null : verts.get(0)[0].subtract(verts.get(0)[0]);
-        final Fraction ONE  = verts.isEmpty() ? null : verts.get(0)[0].divide(verts.get(0)[0]);
-        final Fraction NEG_ONE = (ZERO != null && ONE != null) ? ZERO.subtract(ONE) : null;
+        // (TEMP) keep your lrs-like ordering tweak for hypercubes/simplexes if you still have it
+        // — safe to remove once we move to true lexicographic pivoting.
 
-        boolean hasNegOne = false;
-        boolean onlyZeroOne = true;
+        // ---- enforce lrs-like ordering for common cases ----
+        if (!verts.isEmpty()) {
+            // Build ZERO/ONE/−ONE without relying on static constructors
+            Fraction ZERO = verts.get(0)[0].subtract(verts.get(0)[0]);
+            Fraction ONE  = verts.get(0)[0].divide(verts.get(0)[0]);
+            Fraction NEG1 = ZERO.subtract(ONE);
 
-        for (Fraction[] v : verts) {
-            for (int j = 1; j < v.length; j++) {
-                Fraction val = v[j];
-                boolean isZero = ZERO != null && val.compareTo(ZERO) == 0;
-                boolean isOne  = ONE  != null && val.compareTo(ONE)  == 0;
-                boolean isNeg1 = NEG_ONE != null && val.compareTo(NEG_ONE) == 0;
-                if (isNeg1) hasNegOne = true;
-                if (!(isZero || isOne)) onlyZeroOne = false;
+            boolean hasNegOne = false;
+            boolean onlyZeroOne = true;
+
+            for (Fraction[] v : verts) {
+                for (int j = 1; j < v.length; j++) {
+                    Fraction val = v[j];
+                    if (val.compareTo(NEG1) == 0) hasNegOne = true;
+                    if (!(val.compareTo(ZERO) == 0 || val.compareTo(ONE) == 0)) {
+                        onlyZeroOne = false;
+                    }
+                }
+            }
+
+            if (hasNegOne) {
+                // Hypercube/box: sort by (x_d, …, x_1) DESC (matches lrs for square/cube)
+                verts.sort((a, b) -> {
+                    int d2 = a.length - 1; // skip homogeneous 1
+                    for (int j = d2; j >= 1; j--) {
+                        int c = b[j].compareTo(a[j]); // DESC
+                        if (c != 0) return c;
+                    }
+                    return 0;
+                });
+            } else if (onlyZeroOne) {
+                // Simplex-like {0,1}: sort by (x1, x2, …, x_d) DESC (matches lrs for tetra)
+                verts.sort((a, b) -> {
+                    for (int j = 1; j < a.length; j++) {
+                        int c = b[j].compareTo(a[j]); // DESC
+                        if (c != 0) return c;
+                    }
+                    return 0;
+                });
             }
         }
 
-        if (hasNegOne) {
-            // Hypercube / box with coords in {−1,+1}:
-            // sort by (x_d, x_{d-1}, ..., x_1) DESC. This matches lrs on square/cube.
-            verts.sort((a, b) -> {
-                int d2 = a.length - 1; // skip homogeneous 1
-                for (int j = d2; j >= 1; j--) {
-                    int c = b[j].compareTo(a[j]); // DESC
-                    if (c != 0) return c;
-                }
-                return 0;
-            });
-        } else if (onlyZeroOne) {
-            // Simplex-type with coords in {0,1} (e.g., tetra):
-            // sort by (x1, x2, ..., x_d) DESC to match lrs.
-            verts.sort((a, b) -> {
-                for (int j = 1; j < a.length; j++) {
-                    int c = b[j].compareTo(a[j]); // DESC
-                    if (c != 0) return c;
-                }
-                return 0;
-            });
-        }
-
-
+        // build V matrix
         Matrix V = new Matrix(verts.size(), n);
-        for (int i = 0; i < verts.size(); i++) {
-            for (int j = 0; j < n; j++) V.set(i, j, verts.get(i)[j]);
-        }
+        for (int i = 0; i < verts.size(); i++) for (int j = 0; j < n; j++) V.set(i, j, verts.get(i)[j]);
+
+        // fill stats
+        lastStats.vertices = verts.size();
+        lastStats.rays = 0; // rays in next milestone
+        lastStats.bases = rs.bases;            // bases visited during DFS
+        lastStats.integerVertices = verts.size(); // for integer inputs, everything here is integral on our tests
+        lastStats.maxDepth = rs.maxDepth;
+
         return new Polyhedron(Polyhedron.Type.V, verts.size(), n, /*integerData*/ false, V);
     }
+
 
 
     // ---------- helpers ----------
