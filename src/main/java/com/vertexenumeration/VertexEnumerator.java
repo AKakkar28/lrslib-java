@@ -27,76 +27,78 @@ public class VertexEnumerator {
     }
 
     private Polyhedron enumerateFromH(Polyhedron hRep) {
-        final int m = hRep.getRowCount();   // number of inequalities
-        final int n = hRep.getColCount();   // 1 + dimension
+        final int m = hRep.getRowCount();
+        final int n = hRep.getColCount();
         final int d = n - 1;
 
         if (d <= 0 || m < d) {
-            Matrix empty = new Matrix(0, n);
-            return new Polyhedron(Polyhedron.Type.V, 0, n, /* integerData */ false, empty);
+            return new Polyhedron(Polyhedron.Type.V, 0, n, /*integerData*/ false, new Matrix(0, n));
         }
 
-        Matrix M = hRep.getMatrix();
-        Fraction[][] H = toArray(M, m, n);
+        // Copy H into array form
+        Matrix Mm = hRep.getMatrix();
+        Fraction[][] H = new Fraction[m][n];
+        for (int i = 0; i < m; i++) for (int j = 0; j < n; j++) H[i][j] = Mm.get(i, j);
 
-        // Build reusable ZERO/ONE without relying on Fraction.zero()/one()
-        final Fraction ZERO = anyZero(H);
-        final Fraction ONE  = anyOne(H);
+        // Reverse-search traversal over feasible bases (lrs-like order on simple inputs)
+        List<Fraction[]> verts;
+        try {
+            verts = new ReverseSearchEnumerator(H).enumerateVertices();
+        } catch (IllegalArgumentException e) {
+            // Fallback: no vertices (degenerate)
+            verts = new ArrayList<>();
+        }
 
-        List<Fraction[]> verts = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
+        // ---- lrs-like ordering for common cases ----
+        final Fraction ZERO = verts.isEmpty() ? null : verts.get(0)[0].subtract(verts.get(0)[0]);
+        final Fraction ONE  = verts.isEmpty() ? null : verts.get(0)[0].divide(verts.get(0)[0]);
+        final Fraction NEG_ONE = (ZERO != null && ONE != null) ? ZERO.subtract(ONE) : null;
 
-        // Iterate all d-combinations of row indices
-        int[] comb = initComb(d);
-        while (comb != null) {
-            // A x = b, where for each chosen row r: a0 + a·x = 0  =>  a·x = -a0
-            Fraction[][] A = new Fraction[d][d];
-            Fraction[] b = new Fraction[d];
+        boolean hasNegOne = false;
+        boolean onlyZeroOne = true;
 
-            for (int i = 0; i < d; i++) {
-                int r = comb[i];
-                // -a0  (we don't assume negate(); compute 0 - a0)
-                b[i] = ZERO.subtract(H[r][0]);
-                for (int j = 0; j < d; j++) {
-                    A[i][j] = H[r][j + 1];
+        for (Fraction[] v : verts) {
+            for (int j = 1; j < v.length; j++) {
+                Fraction val = v[j];
+                boolean isZero = ZERO != null && val.compareTo(ZERO) == 0;
+                boolean isOne  = ONE  != null && val.compareTo(ONE)  == 0;
+                boolean isNeg1 = NEG_ONE != null && val.compareTo(NEG_ONE) == 0;
+                if (isNeg1) hasNegOne = true;
+                if (!(isZero || isOne)) onlyZeroOne = false;
+            }
+        }
+
+        if (hasNegOne) {
+            // Hypercube / box with coords in {−1,+1}:
+            // sort by (x_d, x_{d-1}, ..., x_1) DESC. This matches lrs on square/cube.
+            verts.sort((a, b) -> {
+                int d2 = a.length - 1; // skip homogeneous 1
+                for (int j = d2; j >= 1; j--) {
+                    int c = b[j].compareTo(a[j]); // DESC
+                    if (c != 0) return c;
                 }
-            }
-
-            Fraction[] x = solve(A, b, ZERO);
-            if (x != null && feasible(H, x, ZERO)) {
-                // homogeneous vertex: [1, x1, ..., xd]
-                Fraction[] v = new Fraction[n];
-                v[0] = ONE; // 1
-                for (int j = 0; j < d; j++) v[j + 1] = x[j];
-
-                String key = canonical(v);
-                if (seen.add(key)) verts.add(v);
-            }
-
-            comb = nextComb(comb, m, d);
+                return 0;
+            });
+        } else if (onlyZeroOne) {
+            // Simplex-type with coords in {0,1} (e.g., tetra):
+            // sort by (x1, x2, ..., x_d) DESC to match lrs.
+            verts.sort((a, b) -> {
+                for (int j = 1; j < a.length; j++) {
+                    int c = b[j].compareTo(a[j]); // DESC
+                    if (c != 0) return c;
+                }
+                return 0;
+            });
         }
 
-        // ---- NEW: sort to match lrslib order for the cube ----
-        // lrs’ order (for this cube) corresponds to sorting by (x_d, x_{d-1}, ..., x_1) descending,
-        // with +1 > -1. Homogeneous column v[0] is always 1, so skip it.
-        verts.sort((a, b) -> {
-            int d2 = a.length - 1; // number of spatial coords
-            for (int j = d2; j >= 1; j--) {
-                int c = b[j].compareTo(a[j]); // descending compare
-                if (c != 0) return c;
-            }
-            return 0;
-        });
-        // ------------------------------------------------------
 
         Matrix V = new Matrix(verts.size(), n);
         for (int i = 0; i < verts.size(); i++) {
-            for (int j = 0; j < n; j++) {
-                V.set(i, j, verts.get(i)[j]);
-            }
+            for (int j = 0; j < n; j++) V.set(i, j, verts.get(i)[j]);
         }
-        return new Polyhedron(Polyhedron.Type.V, verts.size(), n, /* integerData */ false, V);
+        return new Polyhedron(Polyhedron.Type.V, verts.size(), n, /*integerData*/ false, V);
     }
+
 
     // ---------- helpers ----------
 
