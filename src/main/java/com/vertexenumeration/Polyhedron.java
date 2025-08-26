@@ -22,7 +22,7 @@ public class Polyhedron {
     private final Matrix matrix;
     private final boolean integerData;
 
-    private Polyhedron(Type type, int m, int n, boolean integerData, Matrix matrix) {
+    Polyhedron(Type type, int m, int n, boolean integerData, Matrix matrix) {
         this.type = type;
         this.rowCount = m;
         this.colCount = n;
@@ -121,7 +121,7 @@ public class Polyhedron {
      * Writes this polyhedron to the given {@link PrintWriter} in lrslib
      * format.  The caller is responsible for closing the writer.
      */
-    public void write(PrintWriter out) {
+    public void write(PrintWriter out) throws IOException {
         out.println((type == Type.H ? "H" : "V") + "-representation");
         out.println("begin");
         out.printf("%d %d %s%n", rowCount, colCount, integerData ? "integer" : "rational");
