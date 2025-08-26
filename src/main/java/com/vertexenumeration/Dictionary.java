@@ -1,131 +1,191 @@
 package com.vertexenumeration;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Arrays;
+import java.util.Objects;
 
 /**
- * Represents a simplex dictionary (tableau) used in the reverse search
- * algorithm for vertex enumeration.  Each dictionary corresponds to a
- * particular basis/cobasis and stores the coefficients of the linear
- * constraints and objective.  This class only defines the data
- * structures; the pivot operations and lexicographic rules must be
- * implemented separately.
+ * Dictionary (simplex tableau) for reverse search / LP steps.
+ *
+ * Layout:
+ *   Row 0   : objective (z - c^T x = 0), RHS in col 0
+ *   Rows 1..m : constraints (b - A x = 0), RHS in col 0
+ *   Col 0   : RHS
+ *   Cols 1..n: non-basic variable columns
+ *
+ * basis[r]   = variable id basic in row r (1..m)
+ * cobasis[c] = variable id non-basic in column c (1..n)
  */
-public class Dictionary {
-    /** Number of constraints (rows). */
-    public final int m;
-    /** Number of variables (columns). */
-    public final int n;
+final class Dictionary {
 
-    /** The tableau coefficients.  An (m×n) matrix of Fractions. */
-    public final Fraction[][] tableau;
+    private final int m;            // constraints
+    private final int n;            // non-basic columns
+    private final Fraction[][] T;   // (m+1) x (n+1) tableau; T[row][col]
+    private final int[] basis;      // size m+1, index 0 unused
+    private final int[] cobasis;    // size n+1, index 0 unused
+    private PivotRule pivotRule = PivotRule.BLAND;
 
-    /** Indices of basic variables.  Length m. */
-    public final int[] basis;
+    private LPStatus status = LPStatus.RUNNING;
 
-    /** Indices of non-basic variables.  Length n. */
-    public final int[] cobasis;
+    // Local ZERO derived from the incoming tableau; avoids relying on Fraction.ZERO
+    private final Fraction ZERO;
 
-    /** Current solution vector for the basic variables.  Length m. */
-    public final Fraction[] solution;
-
-    /**
-     * Constructs a blank dictionary of the given dimensions.  All
-     * fractional entries are initialised to zero.  Basis and cobasis
-     * arrays are initialised with default indices (0..m-1 for the
-     * basis, m..m+n-1 for the cobasis).
-     */
-    public Dictionary(int m, int n) {
+    Dictionary(int m, int n, Fraction[][] tableau, int[] basis, int[] cobasis) {
         this.m = m;
         this.n = n;
-        this.tableau = new Fraction[m][n];
-        Fraction zero = new Fraction(java.math.BigInteger.ZERO, java.math.BigInteger.ONE);
-        for (int i = 0; i < m; i++) {
-            for (int j = 0; j < n; j++) {
-                tableau[i][j] = zero;
+        this.T = deepCopy(tableau);
+        this.basis = Arrays.copyOf(basis, basis.length);
+        this.cobasis = Arrays.copyOf(cobasis, cobasis.length);
+        sanity();
+
+        // Derive a ZERO value without assuming a static constant on Fraction
+        Fraction probe = this.T[0][0];
+        this.ZERO = probe.subtract(probe);
+    }
+
+    // Convenience builder
+    public static Dictionary of(Fraction[][] tableau, int[] basis, int[] cobasis) {
+        int m = tableau.length - 1;
+        int n = tableau[0].length - 1;
+        return new Dictionary(m, n, tableau, basis, cobasis);
+    }
+
+    private void sanity() {
+        if (T.length != m + 1) throw new IllegalArgumentException("tableau row count mismatch");
+        for (Fraction[] row : T) {
+            if (row.length != n + 1) throw new IllegalArgumentException("tableau col count mismatch");
+            for (int j = 0; j <= n; j++) {
+                if (row[j] == null) throw new IllegalArgumentException("null Fraction in tableau");
             }
         }
-        this.basis = new int[m];
-        this.cobasis = new int[n];
-        this.solution = new Fraction[m];
-        for (int i = 0; i < m; i++) {
-            basis[i] = i;
-            solution[i] = zero;
-        }
-        for (int j = 0; j < n; j++) {
-            cobasis[j] = m + j;
-        }
+        if (basis.length != m + 1) throw new IllegalArgumentException("basis length mismatch");
+        if (cobasis.length != n + 1) throw new IllegalArgumentException("cobasis length mismatch");
+    }
+
+    private static Fraction[][] deepCopy(Fraction[][] a) {
+        Fraction[][] c = new Fraction[a.length][];
+        for (int i = 0; i < a.length; i++) c[i] = Arrays.copyOf(a[i], a[i].length);
+        return c;
+    }
+
+    // --- accessors (useful for your ReverseSearchEnumerator wiring)
+    public int m() { return m; }
+    public int n() { return n; }
+    public LPStatus status() { return status; }
+    public int[] basis() { return Arrays.copyOf(basis, basis.length); }
+    public int[] cobasis() { return Arrays.copyOf(cobasis, cobasis.length); }
+    public Fraction[][] tableau() { return deepCopy(T); }
+
+    public void setPivotRule(PivotRule rule) { this.pivotRule = Objects.requireNonNull(rule); }
+
+    // --- small helpers that don’t rely on Fraction methods
+    private boolean isNeg(Fraction x) { return x.compareTo(ZERO) < 0; }
+    private boolean isPos(Fraction x) { return x.compareTo(ZERO) > 0; }
+    private boolean isZero(Fraction x){ return x.compareTo(ZERO) == 0; }
+
+    /** Feasibility for standard form: all RHS (rows 1..m, col 0) >= 0. */
+    public boolean isFeasible() {
+        for (int r = 1; r <= m; r++) if (isNeg(T[r][0])) return false;
+        return true;
+    }
+
+    /** Any negative reduced cost in row 0, cols 1..n? */
+    private boolean anyNegativeReducedCost() {
+        for (int c = 1; c <= n; c++) if (isNeg(T[0][c])) return true;
+        return false;
     }
 
     /**
-     * Returns a copy of this dictionary.  Only the arrays are cloned; the
-     * Fraction objects themselves are immutable and thus shared.
+     * One simplex step:
+     *  - choose entering column (Bland)
+     *  - ratio test for leaving row
+     *  - pivot
+     * Sets status to OPTIMAL / UNBOUNDED when appropriate.
      */
-    public Dictionary copy() {
-        Dictionary d = new Dictionary(m, n);
-        for (int i = 0; i < m; i++) {
-            d.basis[i] = this.basis[i];
-            d.solution[i] = this.solution[i];
-            for (int j = 0; j < n; j++) {
-                d.tableau[i][j] = this.tableau[i][j];
-            }
+    public void step() {
+        if (!anyNegativeReducedCost()) { status = LPStatus.OPTIMAL; return; }
+
+        int enterCol = chooseEnteringColumn();
+        if (enterCol == -1) { status = LPStatus.OPTIMAL; return; }
+
+        int leaveRow = chooseLeavingRow(enterCol);
+        if (leaveRow == -1) { status = LPStatus.UNBOUNDED; return; }
+
+        pivot(leaveRow, enterCol);
+        status = LPStatus.RUNNING;
+    }
+
+    /** Bland’s rule: smallest column index with negative reduced cost. */
+    private int chooseEnteringColumn() {
+        if (pivotRule == PivotRule.BLAND) {
+            for (int c = 1; c <= n; c++) if (isNeg(T[0][c])) return c;
+            return -1;
         }
-        for (int j = 0; j < n; j++) {
-            d.cobasis[j] = this.cobasis[j];
-        }
-        return d;
+        // Future: DANTZIG, STEEPEST_EDGE, etc.
+        for (int c = 1; c <= n; c++) if (isNeg(T[0][c])) return c;
+        return -1;
     }
 
     /**
-     * Performs a pivot operation on the dictionary.  Given a pivot row
-     * {@code r} and a pivot column {@code c}, this method returns a new
-     * dictionary corresponding to the adjacent basis obtained by
-     * entering variable c and leaving variable r.  **Note:** this is a
-     * placeholder implementation that does not yet enforce the
-     * lexicographic pivot rule or check feasibility.  Proper pivot
-     * operations must be implemented when translating the algorithm.
-     *
-     * @param r the index of the leaving variable (row)
-     * @param c the index of the entering variable (column)
-     * @return a new {@code Dictionary} resulting from the pivot
+     * Min ratio test: argmin { RHS / a_rc | a_rc > 0 } across rows r=1..m.
+     * @return leaving row index or -1 if a_rc <= 0 for all r (unbounded).
      */
-    public Dictionary pivot(int r, int c) {
-        Dictionary next = this.copy();
-        // Update basis and cobasis indices
-        int leavingVar = next.basis[r];
-        int enteringVar = next.cobasis[c];
-        next.basis[r] = enteringVar;
-        next.cobasis[c] = leavingVar;
-        // Compute new tableau coefficients
-        // Pivot element
-        Fraction pivot = tableau[r][c];
-        if (pivot.compareTo(new Fraction(java.math.BigInteger.ZERO, java.math.BigInteger.ONE)) == 0) {
-            throw new ArithmeticException("Pivot element is zero");
-        }
-        // Update pivot row
-        for (int j = 0; j < n; j++) {
-            next.tableau[r][j] = tableau[r][j].divide(pivot);
-        }
-        next.solution[r] = solution[r].divide(pivot);
-        // Update remaining rows
-        for (int i = 0; i < m; i++) {
-            if (i == r) continue;
-            Fraction factor = tableau[i][c];
-            for (int j = 0; j < n; j++) {
-                Fraction val = tableau[i][j].subtract(factor.multiply(next.tableau[r][j]));
-                next.tableau[i][j] = val;
+    private int chooseLeavingRow(int enterCol) {
+        Fraction best = null;
+        int arg = -1;
+        for (int r = 1; r <= m; r++) {
+            Fraction a = T[r][enterCol];
+            if (isPos(a)) {
+                Fraction ratio = T[r][0].divide(a);
+                if (best == null || ratio.compareTo(best) < 0) {
+                    best = ratio;
+                    arg = r;
+                }
             }
-            Fraction solVal = solution[i].subtract(factor.multiply(next.solution[r]));
-            next.solution[i] = solVal;
         }
-        // Set pivot column in pivot row and pivot column in other rows
-        for (int i = 0; i < m; i++) {
-            next.tableau[i][c] = (i == r)
-                    ? new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.ONE)
-                    : new Fraction(java.math.BigInteger.ZERO, java.math.BigInteger.ONE);
+        return arg;
+    }
+
+    /**
+     * Pivot at (leaveRow, enterCol). Gauss–Jordan update and label swap.
+     */
+    public void pivot(int leaveRow, int enterCol) {
+        Fraction piv = T[leaveRow][enterCol];
+        if (isZero(piv)) throw new IllegalArgumentException("Pivot on zero element");
+
+        // Normalize pivot row
+        for (int c = 0; c <= n; c++) T[leaveRow][c] = T[leaveRow][c].divide(piv);
+
+        // Eliminate column from other rows
+        for (int r = 0; r <= m; r++) {
+            if (r == leaveRow) continue;
+            Fraction factor = T[r][enterCol];
+            if (isZero(factor)) continue;
+            for (int c = 0; c <= n; c++) {
+                if (c == enterCol) {
+                    T[r][c] = ZERO; // becomes exactly zero
+                } else {
+                    T[r][c] = T[r][c].subtract(factor.multiply(T[leaveRow][c]));
+                }
+            }
         }
-        // Set pivot row solution entry to pivot row solution
-        next.solution[r] = solution[r].divide(pivot);
-        return next;
+
+        // Swap labels
+        int enteringVar = cobasis[enterCol];
+        int leavingVar  = basis[leaveRow];
+        basis[leaveRow]   = enteringVar;
+        cobasis[enterCol] = leavingVar;
+    }
+
+    /**
+     * Run simplex until OPTIMAL/UNBOUNDED or iteration cap.
+     * Returns final status (RUNNING can mean degeneracy protection hit maxIters).
+     */
+    public LPStatus solve(int maxIters) {
+        int it = 0;
+        while (status == LPStatus.RUNNING && it < maxIters) {
+            step();
+            it++;
+        }
+        return status;
     }
 }
