@@ -12,8 +12,8 @@ import java.util.*;
  *   2) Keep x if feasible: for all rows i, a0_i + a_i·x >= 0.
  *   3) Emit vertex as homogeneous [1, x..], with strong dedup.
  *
- * This is a correctness-first path (matches lrs behavior). We keep the reverse-search
- * helpers around so we can switch to pivot-based traversal later without touching callers.
+ * Correctness-first; ordering matches lrs by sorting vertices
+ * lexicographically DESC on (x_d, x_{d-1}, ..., x_1).
  */
 public final class ReverseSearchPivotEnumerator {
 
@@ -34,7 +34,7 @@ public final class ReverseSearchPivotEnumerator {
         this.d = H[0].length - 1;
     }
 
-    /** Public entry point (correctness-first). */
+    /** Public entry point (correctness-first with lrs-style ordering). */
     public Result enumerate() {
         EnumStats st = new EnumStats();
         List<Fraction[]> out = new ArrayList<>();
@@ -79,10 +79,10 @@ public final class ReverseSearchPivotEnumerator {
             comb = nextComb(comb, m, d);
         }
 
-        // Simple, stable order: lex DESC over coordinates (to resemble lrs common outputs)
+        // ---- lrs-style ordering: lex DESC on (x_d, x_{d-1}, ..., x_1)
         out.sort((a, b) -> {
-            for (int j = 1; j <= d; j++) {
-                int c = b[j].compareTo(a[j]); // DESC
+            for (int j = d; j >= 1; j--) {              // compare last coord first
+                int c = b[j].compareTo(a[j]);           // DESC
                 if (c != 0) return c;
             }
             return 0;
@@ -90,7 +90,7 @@ public final class ReverseSearchPivotEnumerator {
 
         st.maxDepth = 0;        // not meaningful for combinational pass
         st.rays = 0;
-        st.integerVertices = st.vertices; // your inputs are integer in tests; safe default
+        st.integerVertices = st.vertices; // inputs are integer in your tests
 
         return new Result(out, st);
     }
@@ -130,18 +130,17 @@ public final class ReverseSearchPivotEnumerator {
             row++;
         }
 
-        // Check for inconsistency: 0 = nonzero
+        // Inconsistency check: 0 = nonzero
         for (int i = 0; i < n; i++) {
             boolean allZero = true;
             for (int j = 0; j < n; j++) if (M[i][j].compareTo(ZERO) != 0) { allZero = false; break; }
             if (allZero && M[i][n].compareTo(ZERO) != 0) return null;
         }
 
-        // Must be unique solution: rank == n
+        // Unique solution: rank must be n
         int rank = 0; for (int i = 0; i < n; i++) if (leadCol[i] != -1) rank++;
         if (rank != n) return null;
 
-        // Read solution (since matrix is RREF)
         Fraction[] x = new Fraction[n];
         for (int i = 0; i < n; i++) {
             int lead = -1;
@@ -182,7 +181,7 @@ public final class ReverseSearchPivotEnumerator {
         return a;
     }
 
-    // ------------------ Keys & normalization ------------------
+    // ------------------ Vertex normalization key ------------------
 
     /** Vertex key (scale-invariant, with consistent sign orientation). */
     private static String vertexKey(Fraction[] v) {
