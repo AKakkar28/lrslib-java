@@ -195,4 +195,16 @@ final class Dictionary {
     }
     enum PivotRule { BLAND, LEXICOGRAPHIC }
     enum LPStatus { RUNNING, OPTIMAL, UNBOUNDED }
+
+    // --- helpers for reverse search (public on purpose)
+    public int leavingRowFor(int enterCol) {
+        // Uses the dictionary's active pivot rule (LEXICOGRAPHIC by default)
+        // Returns -1 if no feasible leaving row (i.e., pivot would be infeasible/unbounded).
+        return chooseLeavingRow(enterCol);
+    }
+
+    public boolean canPivot(int enterCol) {
+        return leavingRowFor(enterCol) != -1;
+    }
+
 }

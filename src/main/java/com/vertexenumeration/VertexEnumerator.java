@@ -16,11 +16,11 @@ public class VertexEnumerator {
             // V → H
             Polyhedron out = FacetEnumerator.fromV(input);
 
-            // >>> add this block <<<
+            // stats for V→H path (placeholder until full reverse-search implemented)
             lastStats = new EnumStats();
             lastStats.vertices = 0;                 // not meaningful for V→H
             lastStats.rays = 0;
-            lastStats.bases = out.getRowCount();    // placeholder until full reverse-search implemented
+            lastStats.bases = out.getRowCount();    // placeholder
             lastStats.integerVertices = 0;
             lastStats.maxDepth = 0;
 
@@ -79,7 +79,7 @@ public class VertexEnumerator {
 
             SimplexDictionary dict = new SimplexDictionary(H, B);
             Fraction[] x = dict.vertex();
-            verts.add(toHomogeneous(x, H));
+            verts.add(toHomogeneous(x));
             vertexBases.add(B.clone());
 
             lastStats.bases++;
@@ -105,16 +105,12 @@ public class VertexEnumerator {
 
         // ---- temporary ordering shim for fixtures; keep bases aligned ----
         if (!verts.isEmpty()) {
-            Fraction ZERO = verts.get(0)[0].subtract(verts.get(0)[0]);
-            Fraction ONE  = verts.get(0)[0].divide(verts.get(0)[0]);
-            Fraction NEG1 = ZERO.subtract(ONE);
-
             boolean hasNegOne = false;
             boolean onlyZeroOne = true;
             for (Fraction[] v : verts) {
                 for (int j = 1; j < v.length; j++) {
-                    if (v[j].compareTo(NEG1) == 0) hasNegOne = true;
-                    if (!(v[j].compareTo(ZERO) == 0 || v[j].compareTo(ONE) == 0)) {
+                    if (v[j].compareTo(Fraction.ZERO.subtract(Fraction.ONE)) == 0) hasNegOne = true;
+                    if (!(v[j].compareTo(Fraction.ZERO) == 0 || v[j].compareTo(Fraction.ONE) == 0)) {
                         onlyZeroOne = false;
                     }
                 }
@@ -186,20 +182,19 @@ public class VertexEnumerator {
         final int d = H[0].length - 1;
         Fraction[] v = new Fraction[d];
         System.arraycopy(ray, 1, v, 0, d);
-        Fraction ZERO = v[0].subtract(v[0]);
 
         for (int i = 0; i < vertexBases.size(); i++) {
             int zeros = 0;
             Fraction nonZero = null;
             for (int rIdx : vertexBases.get(i)) {
                 Fraction s = dotRowA(H, rIdx, v);
-                if (s.compareTo(ZERO) == 0) {
+                if (s.compareTo(Fraction.ZERO) == 0) {
                     zeros++;
                 } else {
                     nonZero = s;
                 }
             }
-            if (zeros == d - 1 && (nonZero == null || nonZero.compareTo(ZERO) > 0)) {
+            if (zeros == d - 1 && (nonZero == null || nonZero.compareTo(Fraction.ZERO) > 0)) {
                 return i; // first vertex in output order that emits this ray
             }
         }
@@ -209,7 +204,7 @@ public class VertexEnumerator {
     // ---- dot of A-row with vector v ----
     private static Fraction dotRowA(Fraction[][] H, int row, Fraction[] v) {
         int d = v.length;
-        Fraction s = v[0].subtract(v[0]); // ZERO
+        Fraction s = Fraction.ZERO;
         for (int j = 0; j < d; j++) s = s.add(H[row][j + 1].multiply(v[j]));
         return s;
     }
@@ -250,15 +245,9 @@ public class VertexEnumerator {
         return sb.toString();
     }
 
-    private static Fraction[] toHomogeneous(Fraction[] x, Fraction[][] H) {
-        Fraction ZERO = H[0][0].subtract(H[0][0]);
-        Fraction ONE  = null;
-        outer:
-        for (Fraction[] row : H) for (Fraction f : row)
-            if (f.compareTo(ZERO) != 0) { ONE = f.divide(f); break outer; }
-        if (ONE == null) throw new IllegalStateException("Cannot build ONE");
+    private static Fraction[] toHomogeneous(Fraction[] x) {
         Fraction[] v = new Fraction[x.length + 1];
-        v[0] = ONE;
+        v[0] = Fraction.ONE;
         System.arraycopy(x, 0, v, 1, x.length);
         return v;
     }
@@ -273,8 +262,6 @@ public class VertexEnumerator {
     private List<RayRec> enumerateExtremeRaysWithTightSets(Fraction[][] H) {
         final int m = H.length, n = H[0].length, d = n - 1;
         if (d - 1 <= 0) return Collections.emptyList();
-
-        Fraction ZERO = H[0][0].subtract(H[0][0]);
 
         // Extract A only (drop column 0 = b)
         Fraction[][] A = new Fraction[m][d];
@@ -295,13 +282,13 @@ public class VertexEnumerator {
             Fraction[] v = nullspace1(As); // returns nonzero vector if nullspace is 1D, else null
             if (v != null) {
                 // Try v and -v; keep the one with A v >= 0
-                if (!allGe(A, v, ZERO)) {
+                if (!allGe(A, v)) {
                     Fraction[] vneg = negate(v);
-                    if (allGe(A, vneg, ZERO)) v = vneg; else v = null;
+                    if (allGe(A, vneg)) v = vneg; else v = null;
                 }
                 if (v != null) {
                     Fraction[] ray = new Fraction[d + 1];
-                    ray[0] = ZERO; // leading 0 for a ray
+                    ray[0] = Fraction.ZERO; // leading 0 for a ray
                     System.arraycopy(v, 0, ray, 1, d);
                     String rkey = rayKey(ray);
                     if (seen.add(rkey)) out.add(new RayRec(ray, comb.clone(), rkey));
@@ -313,11 +300,11 @@ public class VertexEnumerator {
         return out;
     }
 
-    private static boolean allGe(Fraction[][] A, Fraction[] v, Fraction ZERO) {
+    private static boolean allGe(Fraction[][] A, Fraction[] v) {
         for (int i = 0; i < A.length; i++) {
-            Fraction s = ZERO;
+            Fraction s = Fraction.ZERO;
             for (int j = 0; j < v.length; j++) s = s.add(A[i][j].multiply(v[j]));
-            if (s.compareTo(ZERO) < 0) return false;
+            if (s.compareTo(Fraction.ZERO) < 0) return false;
         }
         return true;
     }
@@ -325,7 +312,6 @@ public class VertexEnumerator {
     // one-dimensional nullspace via Gauss–Jordan; returns any nonzero v with As v = 0 or null if dim != 1
     private static Fraction[] nullspace1(Fraction[][] As) {
         int r = As.length, d = As[0].length;
-        Fraction ZERO = As[0][0].subtract(As[0][0]);
 
         // Copy
         Fraction[][] M = new Fraction[r][d];
@@ -337,14 +323,14 @@ public class VertexEnumerator {
         Arrays.fill(lead, -1);
         for (int col = 0; col < d && row < r; col++) {
             int p = row;
-            while (p < r && M[p][col].compareTo(ZERO) == 0) p++;
+            while (p < r && M[p][col].compareTo(Fraction.ZERO) == 0) p++;
             if (p == r) continue;
             if (p != row) { Fraction[] t = M[p]; M[p] = M[row]; M[row] = t; }
             Fraction diag = M[row][col];
             for (int j = col; j < d; j++) M[row][j] = M[row][j].divide(diag);
             for (int i = 0; i < r; i++) if (i != row) {
                 Fraction f = M[i][col];
-                if (f.compareTo(ZERO) != 0) {
+                if (f.compareTo(Fraction.ZERO) != 0) {
                     for (int j = col; j < d; j++) {
                         M[i][j] = M[i][j].subtract(f.multiply(M[row][j]));
                     }
@@ -365,29 +351,21 @@ public class VertexEnumerator {
         for (int j = d - 1; j >= 0; j--) if (!isPivotCol[j]) { free = j; break; }
         if (free == -1) return null;
 
-        // Build ONE robustly
-        Fraction ONE = null;
-        outer:
-        for (int i = 0; i < r; i++) for (int j = 0; j < d; j++) {
-            if (M[i][j].compareTo(ZERO) != 0) { ONE = M[i][j].divide(M[i][j]); break outer; }
-        }
-        if (ONE == null) return null;
-
         Fraction[] v = new Fraction[d];
-        for (int j = 0; j < d; j++) v[j] = ZERO;
-        v[free] = ONE;
+        Arrays.fill(v, Fraction.ZERO);
+        v[free] = Fraction.ONE;
+
         // For pivot rows: x_pivot = - M[row][free] (since row is reduced)
         for (int i = 0; i < r; i++) if (lead[i] != -1) {
             int piv = lead[i];
-            v[piv] = ZERO.subtract(M[i][free]);
+            v[piv] = Fraction.ZERO.subtract(M[i][free]);
         }
         return v;
     }
 
     private static Fraction[] negate(Fraction[] v){
-        Fraction ZERO = v[0].subtract(v[0]);
         Fraction[] o = new Fraction[v.length];
-        for (int i=0;i<v.length;i++) o[i] = ZERO.subtract(v[i]);
+        for (int i=0;i<v.length;i++) o[i] = Fraction.ZERO.subtract(v[i]);
         return o;
     }
 
@@ -395,12 +373,11 @@ public class VertexEnumerator {
         // Normalize so first non-zero coordinate (after the leading 0) equals +1
         int n = ray.length;
         int first = -1;
-        Fraction ZERO = ray[0].subtract(ray[0]);
-        for (int j = 1; j < n; j++) if (ray[j].compareTo(ZERO) != 0) { first = j; break; }
+        for (int j = 1; j < n; j++) if (ray[j].compareTo(Fraction.ZERO) != 0) { first = j; break; }
         if (first == -1) first = 1; // guard
 
         Fraction s = ray[first];
-        if (s.compareTo(ZERO) < 0) s = ZERO.subtract(s); // flip to positive
+        if (s.compareTo(Fraction.ZERO) < 0) s = Fraction.ZERO.subtract(s); // flip to positive
         StringBuilder sb = new StringBuilder();
         for (int j = 0; j < n; j++) {
             Fraction rj = (j == 0) ? ray[0] : ray[j].divide(s);
@@ -413,13 +390,12 @@ public class VertexEnumerator {
     private static int[] findLexMinFeasibleBasis(Fraction[][] H) {
         final int m = H.length, n = H[0].length, d = n - 1;
         int[] comb = initComb(d);
-        Fraction ZERO = H[0][0].subtract(H[0][0]);
         while (comb != null) {
             try {
                 SimplexDictionary D = new SimplexDictionary(H, comb);
                 boolean ok = true;
                 for (int i = 0; i < m; i++) {
-                    if (D.slack(i).compareTo(ZERO) < 0) { ok = false; break; }
+                    if (D.slack(i).compareTo(Fraction.ZERO) < 0) { ok = false; break; }
                 }
                 if (ok) return comb.clone();
             } catch (Exception ignore) { }
