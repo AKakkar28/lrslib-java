@@ -57,65 +57,69 @@ public class Polyhedron {
     public static Polyhedron readFromFile(String filename) throws IOException {
         try (BufferedReader br = new BufferedReader(new FileReader(filename))) {
             String line;
-            // Skip empty lines and comments
-            do {
-                line = br.readLine();
-                if (line == null) {
-                    throw new IOException("Unexpected end of file");
-                }
+
+            // 1) Scan header lines until we hit a representation or 'begin'
+            Type type = Type.H; // default if omitted (lrs behavior)
+            boolean sawBegin = false;
+
+            while ((line = br.readLine()) != null) {
                 line = line.trim();
-            } while (line.isEmpty());
-            // Determine type (H- or V-representation)
-            Type type;
-            if (line.toLowerCase(Locale.ROOT).startsWith("h-representation")) {
-                type = Type.H;
-            } else if (line.toLowerCase(Locale.ROOT).startsWith("v-representation")) {
-                type = Type.V;
-            } else {
-                throw new IOException("Expected H-representation or V-representation, got: " + line);
-            }
-            // Read 'begin'
-            do {
-                line = br.readLine();
-                if (line == null) {
-                    throw new IOException("Unexpected end of file");
+                if (line.isEmpty()) continue;                 // skip blanks
+                if (line.startsWith("*") || line.startsWith("#")) continue; // skip comments
+
+                String low = line.toLowerCase(Locale.ROOT);
+                if (low.startsWith("h-representation")) { type = Type.H; continue; }
+                if (low.startsWith("v-representation")) { type = Type.V; continue; }
+
+                if (low.equals("begin")) {                    // found matrix section
+                    sawBegin = true;
+                    break;
                 }
-                line = line.trim();
-            } while (line.isEmpty());
-            if (!line.equalsIgnoreCase("begin")) {
-                throw new IOException("Expected 'begin' after representation type, got: " + line);
+
+                // Otherwise: this is a name or pre-begin option (digits, linearity, …). Ignore it.
             }
-            // Read dimensions and integer/rational flag
+
+            if (!sawBegin) throw new IOException("No 'begin' line found");
+
+            // 2) Read the "m n integer|rational" header
             String[] header;
             do {
                 line = br.readLine();
-                if (line == null) {
-                    throw new IOException("Unexpected end of file");
-                }
+                if (line == null) throw new IOException("Unexpected end of file");
                 line = line.trim();
             } while (line.isEmpty());
             header = line.split("\\s+");
             if (header.length < 3) {
                 throw new IOException("Expected 'm n integer|rational', got: " + line);
             }
+
+            // lrs sometimes prints '*****' in place of m, but for inputs we expect a number.
+            // If you need to support '*****', count rows until 'end' and build dynamically.
+            if (!header[0].matches("[-+]?\\d+")) {
+                throw new IOException("Row count must be numeric here; got: " + header[0]);
+            }
+
             int m = Integer.parseInt(header[0]);
             int n = Integer.parseInt(header[1]);
             boolean integerData = header[2].equalsIgnoreCase("integer");
+
+            // 3) Read matrix
             Matrix matrix = Matrix.read(br, m, n);
-            // Read 'end'
+
+            // 4) Expect 'end'
             do {
                 line = br.readLine();
-                if (line == null) {
-                    throw new IOException("Unexpected end of file");
-                }
+                if (line == null) throw new IOException("Unexpected end of file");
                 line = line.trim();
             } while (line.isEmpty());
             if (!line.equalsIgnoreCase("end")) {
                 throw new IOException("Expected 'end', got: " + line);
             }
+
             return new Polyhedron(type, m, n, integerData, matrix);
         }
     }
+
 
     /**
      * Writes this polyhedron to the given {@link PrintWriter} in lrslib

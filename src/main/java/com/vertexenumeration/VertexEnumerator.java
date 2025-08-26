@@ -11,13 +11,13 @@ public class VertexEnumerator {
     // ----- public entrypoint -----
     public Polyhedron enumerate(Polyhedron input) {
         if (input.getType() == Polyhedron.Type.H) {
-            return enumerateFromH(input);
+            return enumerateFromH(input);   // your existing H→V
         } else {
-            // V -> H not implemented yet
-            Matrix empty = new Matrix(0, input.getColCount());
-            return new Polyhedron(Polyhedron.Type.H, 0, input.getColCount(), true, empty);
+            // NEW: minimal V→H (polytopes only; rays ignored for now)
+            return FacetEnumerator.fromV(input);
         }
     }
+
 
     // ----- ray record (kept; tight set no longer used for placement) -----
     static final class RayRec {
