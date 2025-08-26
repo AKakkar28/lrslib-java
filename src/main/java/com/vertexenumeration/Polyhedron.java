@@ -122,10 +122,31 @@ public class Polyhedron {
      * format.  The caller is responsible for closing the writer.
      */
     public void write(PrintWriter out) throws IOException {
-        out.println((type == Type.H ? "H" : "V") + "-representation");
+        if (type == Type.V) {
+            // lrslib-style header for V-representation:
+            out.println("V-representation");
+            out.println("begin");
+            // For V: lrslib prints "***** <cols> rational" (not m n).
+            out.printf("***** %d rational%n", colCount);
+
+            // Dump rows
+            Matrix M = this.matrix;
+            for (int i = 0; i < rowCount; i++) {
+                for (int j = 0; j < colCount; j++) {
+                    out.print(" " + M.get(i, j));
+                }
+                out.println();
+            }
+            out.println("end");
+            return;
+        }
+
+        // H-representation stays as before
+        out.println("H-representation");
         out.println("begin");
         out.printf("%d %d %s%n", rowCount, colCount, integerData ? "integer" : "rational");
         matrix.write(out);
         out.println("end");
     }
+
 }
