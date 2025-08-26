@@ -263,7 +263,13 @@ final class SimplexDictionary {
 
 
     private BitSet inBasis(){ BitSet bs=new BitSet(m); for(int r:basis) bs.set(r); return bs; }
-    private static int lexCompare(int[] a, int[] b){ for(int i=0;i<a.length;i++){ int c=Integer.compare(a[i], b[i]); if(c!=0) return c; } return 0; }
+    private static int lexCompare(int[] a, int[] b) {
+        for (int i = 0; i < a.length; i++) {
+            int c = Integer.compare(a[i], b[i]);
+            if (c != 0) return c;
+        }
+        return 0;
+    }
     private static int lexFrac(Fraction[] A, Fraction[] B){
         for (int i=0;i<A.length;i++){ int c = A[i].compareTo(B[i]); if (c!=0) return c; }
         return 0;

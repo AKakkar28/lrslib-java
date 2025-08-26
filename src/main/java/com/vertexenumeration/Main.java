@@ -3,7 +3,6 @@ package com.vertexenumeration;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.nio.file.Paths;
 
 public class Main {
     public static void main(String[] args) {
@@ -16,34 +15,21 @@ public class Main {
 
         try {
             Polyhedron input = Polyhedron.readFromFile(filename);
-            VertexEnumerator enumerator = new VertexEnumerator();
-            Polyhedron output = enumerator.enumerate(input);
 
-            // lrs-style "name" line (base filename w/o extension)
-            String base = Paths.get(filename).getFileName().toString();
-            int dot = base.lastIndexOf('.');
-            if (dot > 0) base = base.substring(0, dot);
-            System.out.println(base);
+            if (input.getType() == Polyhedron.Type.H) {
+                ReverseSearchPivotEnumerator algo = new ReverseSearchPivotEnumerator(extractH(input));
+                ReverseSearchPivotEnumerator.Result res = algo.enumerate();
 
-            // body
-            PrintWriter pw = new PrintWriter(System.out);
-            output.write(pw);
-            pw.flush();
+                Polyhedron vrep = toV(res.vertices, input.getColCount());
+                try (PrintWriter out = new PrintWriter(System.out)) { vrep.write(out); }
+                System.out.printf("*Totals: vertices=%d rays=%d bases=%d%n", res.stats.vertices, 0, res.stats.bases);
 
-            // footer
-            EnumStats st = enumerator.getLastStats();
-            long t1 = System.nanoTime();
-            if (st != null) {
-                if (output.getType() == Polyhedron.Type.V) {
-                    // H -> V case: your existing Stats string
-                    System.out.println(st.toString());
-                } else {
-                    // V -> H case: report facets like lrs
-                    System.out.printf("*Totals: facets=%d bases=%d%n",
-                            output.getRowCount(), st.bases);
-                }
+            } else {
+                Polyhedron hrep = FacetEnumerator.fromV(input);
+                try (PrintWriter out = new PrintWriter(System.out)) { hrep.write(out); }
             }
-            double secs = (t1 - t0) / 1_000_000_000.0;
+
+            double secs = (System.nanoTime() - t0) / 1_000_000_000.0;
             System.out.printf("*Time=%.3fs%n", secs);
 
         } catch (FileNotFoundException e) {
@@ -53,5 +39,22 @@ public class Main {
             System.err.println("I/O error: " + e.getMessage());
             System.exit(1);
         }
+    }
+
+    private static Fraction[][] extractH(Polyhedron h) {
+        int m = h.getRowCount(), n = h.getColCount();
+        Fraction[][] H = new Fraction[m][n];
+        Matrix M = h.getMatrix();
+        for (int i = 0; i < m; i++) for (int j = 0; j < n; j++) H[i][j] = M.get(i, j);
+        return H;
+    }
+
+    private static Polyhedron toV(java.util.List<Fraction[]> verts, int ncols) {
+        Matrix out = new Matrix(verts.size(), ncols);
+        for (int i = 0; i < verts.size(); i++) {
+            Fraction[] row = verts.get(i);
+            for (int j = 0; j < ncols; j++) out.set(i, j, row[j]);
+        }
+        return new Polyhedron(Polyhedron.Type.V, verts.size(), ncols, false, out);
     }
 }
