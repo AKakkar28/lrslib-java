@@ -1,11 +1,14 @@
 package com.vertexenumeration;
 
-import java.io.*;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.file.Paths;
 
 public class Main {
     public static void main(String[] args) {
         if (args.length != 1) {
-            System.err.println("Usage: java -cp target/<jar> com.vertexenumeration.Main <input-file>");
+            System.err.println("Usage: java -cp target/<jar or classes> com.vertexenumeration.Main <input-file>");
             System.exit(1);
         }
         String filename = args[0];
@@ -16,18 +19,30 @@ public class Main {
             VertexEnumerator enumerator = new VertexEnumerator();
             Polyhedron output = enumerator.enumerate(input);
 
-            // write output
+            // lrs-style "name" line (base filename w/o extension)
+            String base = Paths.get(filename).getFileName().toString();
+            int dot = base.lastIndexOf('.');
+            if (dot > 0) base = base.substring(0, dot);
+            System.out.println(base);
+
+            // body
             PrintWriter pw = new PrintWriter(System.out);
             output.write(pw);
             pw.flush();
 
-            // footer (*Totals...) like lrs
+            // footer
             EnumStats st = enumerator.getLastStats();
             long t1 = System.nanoTime();
             if (st != null) {
-                System.out.println(st.toString());
+                if (output.getType() == Polyhedron.Type.V) {
+                    // H -> V case: your existing Stats string
+                    System.out.println(st.toString());
+                } else {
+                    // V -> H case: report facets like lrs
+                    System.out.printf("*Totals: facets=%d bases=%d%n",
+                            output.getRowCount(), st.bases);
+                }
             }
-            // simple timing line (we won’t mimic lrs’s exact format yet)
             double secs = (t1 - t0) / 1_000_000_000.0;
             System.out.printf("*Time=%.3fs%n", secs);
 

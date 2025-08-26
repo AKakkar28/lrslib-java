@@ -4,16 +4,17 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.io.StringReader;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 /**
- * Represents an H‑ or V‑representation of a convex polyhedron.  This
- * class stores the header information (the type and field) and the
- * coefficient matrix.  It also provides static methods to read from
- * and write to the plain text file format used by lrslib.
+ * Represents an H- or V-representation of a convex polyhedron.
+ * Parses (and writes) an lrslib-compatible format. Output uses the lrs
+ * style line: "***** <ncols> rational" for both H and V.
  */
 public class Polyhedron {
-    /** Enumeration of representation types. */
     public enum Type { H, V }
 
     private final Type type;
@@ -36,52 +37,30 @@ public class Polyhedron {
     public boolean isIntegerData() { return integerData; }
     public Matrix getMatrix() { return matrix; }
 
-    /**
-     * Reads a polyhedron from an input file in lrslib format.  The
-     * method consumes the entire file.  Example of accepted input:
-     *
-     * <pre>
-     * H-representation
-     * begin
-     * 4 3 integer
-     * 1 1 0
-     * 1 0 1
-     * 1 -1 0
-     * 1 0 -1
-     * end
-     * </pre>
-     *
-     * @param filename path to the input file
-     * @return a {@code Polyhedron} instance
-     */
     public static Polyhedron readFromFile(String filename) throws IOException {
         try (BufferedReader br = new BufferedReader(new FileReader(filename))) {
             String line;
 
-            // 1) Scan header lines until we hit a representation or 'begin'
-            Type type = Type.H; // default if omitted (lrs behavior)
+            // ---- scan header (allow: name line, options, then representation/begin) ----
+            Type type = Type.H;               // default if omitted (lrs behavior)
             boolean sawBegin = false;
 
             while ((line = br.readLine()) != null) {
                 line = line.trim();
-                if (line.isEmpty()) continue;                 // skip blanks
-                if (line.startsWith("*") || line.startsWith("#")) continue; // skip comments
+                if (line.isEmpty()) continue;
+                if (line.startsWith("*") || line.startsWith("#")) continue; // comment
 
                 String low = line.toLowerCase(Locale.ROOT);
                 if (low.startsWith("h-representation")) { type = Type.H; continue; }
                 if (low.startsWith("v-representation")) { type = Type.V; continue; }
 
-                if (low.equals("begin")) {                    // found matrix section
-                    sawBegin = true;
-                    break;
-                }
+                if (low.equals("begin")) { sawBegin = true; break; }
 
-                // Otherwise: this is a name or pre-begin option (digits, linearity, …). Ignore it.
+                // otherwise treat as a free "name"/option line and ignore
             }
-
             if (!sawBegin) throw new IOException("No 'begin' line found");
 
-            // 2) Read the "m n integer|rational" header
+            // ---- read header line after 'begin' ----
             String[] header;
             do {
                 line = br.readLine();
@@ -89,68 +68,61 @@ public class Polyhedron {
                 line = line.trim();
             } while (line.isEmpty());
             header = line.split("\\s+");
-            if (header.length < 3) {
-                throw new IOException("Expected 'm n integer|rational', got: " + line);
-            }
+            if (header.length < 3)
+                throw new IOException("Expected 'm n integer|rational' or '***** n integer|rational', got: " + line);
 
-            // lrs sometimes prints '*****' in place of m, but for inputs we expect a number.
-            // If you need to support '*****', count rows until 'end' and build dynamically.
-            if (!header[0].matches("[-+]?\\d+")) {
-                throw new IOException("Row count must be numeric here; got: " + header[0]);
-            }
+            final boolean starHeader = header[0].equals("*****");
+            final int n = Integer.parseInt(header[1]);
+            final boolean integerData = header[2].equalsIgnoreCase("integer");
 
-            int m = Integer.parseInt(header[0]);
-            int n = Integer.parseInt(header[1]);
-            boolean integerData = header[2].equalsIgnoreCase("integer");
+            Matrix matrix;
+            int m;
 
-            // 3) Read matrix
-            Matrix matrix = Matrix.read(br, m, n);
+            if (starHeader) {
+                // Read rows until 'end'
+                List<String> rows = new ArrayList<>();
+                while ((line = br.readLine()) != null) {
+                    String t = line.trim();
+                    if (t.isEmpty()) continue;
+                    if (t.equalsIgnoreCase("end")) break;
+                    rows.add(t);
+                }
+                m = rows.size();
 
-            // 4) Expect 'end'
-            do {
-                line = br.readLine();
-                if (line == null) throw new IOException("Unexpected end of file");
-                line = line.trim();
-            } while (line.isEmpty());
-            if (!line.equalsIgnoreCase("end")) {
-                throw new IOException("Expected 'end', got: " + line);
+                // Re-read the collected rows through a StringReader so Matrix.read can parse them
+                StringBuilder sb = new StringBuilder();
+                for (String r : rows) sb.append(r).append('\n');
+                try (BufferedReader tmp = new BufferedReader(new StringReader(sb.toString()))) {
+                    matrix = Matrix.read(tmp, m, n);
+                }
+                // 'end' already consumed above
+            } else {
+                // Numeric row count
+                if (!header[0].matches("[-+]?\\d+"))
+                    throw new IOException("Row count must be numeric or '*****', got: " + header[0]);
+                m = Integer.parseInt(header[0]);
+                matrix = Matrix.read(br, m, n);
+
+                // Expect 'end'
+                do {
+                    line = br.readLine();
+                    if (line == null) throw new IOException("Unexpected end of file");
+                    line = line.trim();
+                } while (line.isEmpty());
+                if (!line.equalsIgnoreCase("end"))
+                    throw new IOException("Expected 'end', got: " + line);
             }
 
             return new Polyhedron(type, m, n, integerData, matrix);
         }
     }
 
-
-    /**
-     * Writes this polyhedron to the given {@link PrintWriter} in lrslib
-     * format.  The caller is responsible for closing the writer.
-     */
+    /** Write using lrs-style starred header for both H and V. */
     public void write(PrintWriter out) throws IOException {
-        if (type == Type.V) {
-            // lrslib-style header for V-representation:
-            out.println("V-representation");
-            out.println("begin");
-            // For V: lrslib prints "***** <cols> rational" (not m n).
-            out.printf("***** %d rational%n", colCount);
-
-            // Dump rows
-            Matrix M = this.matrix;
-            for (int i = 0; i < rowCount; i++) {
-                for (int j = 0; j < colCount; j++) {
-                    out.print(" " + M.get(i, j));
-                }
-                out.println();
-            }
-            out.println("end");
-            return;
-        }
-
-        // H-representation stays as before
-        out.println("H-representation");
+        out.println((type == Type.H ? "H" : "V") + "-representation");
         out.println("begin");
-        out.printf("%d %d %s%n", rowCount, colCount, integerData ? "integer" : "rational");
+        out.printf("***** %d %s%n", colCount, "rational"); // lrs-style
         matrix.write(out);
         out.println("end");
     }
-
 }

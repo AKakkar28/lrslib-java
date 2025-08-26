@@ -11,10 +11,20 @@ public class VertexEnumerator {
     // ----- public entrypoint -----
     public Polyhedron enumerate(Polyhedron input) {
         if (input.getType() == Polyhedron.Type.H) {
-            return enumerateFromH(input);   // your existing H→V
+            return enumerateFromH(input);   // H → V (already sets lastStats)
         } else {
-            // NEW: minimal V→H (polytopes only; rays ignored for now)
-            return FacetEnumerator.fromV(input);
+            // V → H
+            Polyhedron out = FacetEnumerator.fromV(input);
+
+            // >>> add this block <<<
+            lastStats = new EnumStats();
+            lastStats.vertices = 0;                 // not meaningful for V→H
+            lastStats.rays = 0;
+            lastStats.bases = out.getRowCount();    // placeholder until full reverse-search implemented
+            lastStats.integerVertices = 0;
+            lastStats.maxDepth = 0;
+
+            return out;
         }
     }
 
@@ -168,6 +178,8 @@ public class VertexEnumerator {
 
         return new Polyhedron(Polyhedron.Type.V, totalRows, n, /*integer*/ false, V);
     }
+
+
 
     // ---- attach ray via “d-1 tight in basis, 1 strictly increasing” rule (lrs-style) ----
     private static int attachIndexForRay(Fraction[][] H, List<int[]> vertexBases, Fraction[] ray) {
