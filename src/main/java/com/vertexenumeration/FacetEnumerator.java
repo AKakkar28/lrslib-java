@@ -3,15 +3,23 @@ package com.vertexenumeration;
 import java.util.*;
 
 /** Exact facet enumerator for V-representations (polytopes).
- *  lrs-like ordering: facets sorted by lexicographically minimum cobasis.
+ *  Ordering matches lrs better by:
+ *    (1) putting a0==0 facets first,
+ *    (2) then sorting by lex-min cobasis (indices of tight vertices in input order),
+ *    (3) then by canonicalized inequality row.
  */
 final class FacetEnumerator {
 
     private static final class Facet {
         final Fraction[] h;   // [a0, a1..ad]
-        final int[] cobasis;  // size d, lex-min cobasis (vertex indices in input order)
-        final String key;     // canonical dedup key
-        Facet(Fraction[] h, int[] cobasis, String key){ this.h=h; this.cobasis=cobasis; this.key=key; }
+        final int[] cobasis;  // size d, lex-min cobasis (vertex indices)
+        final String key;     // canonical dedup key of h
+        final boolean a0isZero;
+        final String tie;     // canonical string of h used as last tiebreak
+        Facet(Fraction[] h, int[] cobasis, String key, boolean a0isZero, String tie){
+            this.h=h; this.cobasis=cobasis; this.key=key;
+            this.a0isZero=a0isZero; this.tie=tie;
+        }
     }
 
     static Polyhedron fromV(Polyhedron vRep) {
@@ -19,20 +27,19 @@ final class FacetEnumerator {
         final int n = vRep.getColCount(); // 1 + d
         final int d = n - 1;
 
-        // ---- collect vertices (leading column == 1). Ignore rays for now. ----
+        // ---- collect vertices (leading column == 1); ignore rays for now ----
         Matrix M = vRep.getMatrix();
         List<Fraction[]> verts = new ArrayList<>();
         for (int i = 0; i < m; i++) {
             Fraction lead = M.get(i, 0);
             Fraction ZERO = lead.subtract(lead);
-            if (lead.compareTo(ZERO) == 0) continue;     // ray -> skip
+            if (lead.compareTo(ZERO) == 0) continue; // ray -> skip
             Fraction[] row = new Fraction[n];
             for (int j = 0; j < n; j++) row[j] = M.get(i, j);
             verts.add(row);
         }
         int mv = verts.size();
         if (mv < d + 1) {
-            // Not enough points to define a d-polytope.
             return new Polyhedron(Polyhedron.Type.H, 0, n, false, new Matrix(0, n));
         }
 
@@ -40,11 +47,11 @@ final class FacetEnumerator {
         Map<String,Facet> uniq = new HashMap<>();
         int[] comb = initComb(d);
         while (comb != null) {
-            // Rows [1|x] of the chosen d vertices
+            // rows [1|x] of the chosen d vertices
             Fraction[][] A = new Fraction[d][n];
             for (int i = 0; i < d; i++) System.arraycopy(verts.get(comb[i]), 0, A[i], 0, n);
 
-            // normal (a0,a) with A * (a0,a)^T = 0  (expect nullspace dim = 1)
+            // normal (a0,a) with A * (a0,a)^T = 0 (expect 1D nullspace)
             Fraction[] h = nullspace1(A);
             if (h != null) {
                 // orient so all vertices satisfy >= 0
@@ -56,17 +63,24 @@ final class FacetEnumerator {
                     String key = canonicalFacetKey(h);
                     if (!uniq.containsKey(key)) {
                         int[] cob = lexMinCobasis(h, verts, d);
-                        uniq.put(key, new Facet(h, cob, key));
+                        boolean a0isZero = isZero(h[0]);
+                        // also keep a canonical string of the row for tiebreaks
+                        String tie = canonicalRow(h);
+                        uniq.put(key, new Facet(h, cob, key, a0isZero, tie));
                     }
                 }
             }
-
             comb = nextComb(comb, mv, d);
         }
 
-        // ---- order facets by lrs rule: lexicographic cobasis ----
+        // ---- sort: (a0==0 first) → lex-min cobasis → canonical row ----
         List<Facet> facets = new ArrayList<>(uniq.values());
-        facets.sort((p, q) -> lexInt(p.cobasis, q.cobasis));
+        facets.sort((p, q) -> {
+            if (p.a0isZero != q.a0isZero) return p.a0isZero ? -1 : 1;
+            int c = lexInt(p.cobasis, q.cobasis);
+            if (c != 0) return c;
+            return p.tie.compareTo(q.tie);
+        });
 
         // ---- build output matrix in that order ----
         Matrix out = new Matrix(facets.size(), n);
@@ -140,6 +154,8 @@ final class FacetEnumerator {
 
     // ---------- algebra helpers ----------
 
+    private static boolean isZero(Fraction f){ return f.compareTo(f.subtract(f)) == 0; }
+
     private static Fraction[] negate(Fraction[] v){
         Fraction ZERO = v[0].subtract(v[0]);
         Fraction[] out = new Fraction[v.length];
@@ -168,14 +184,14 @@ final class FacetEnumerator {
 
         int row = 0; int[] lead = new int[r]; Arrays.fill(lead, -1);
         for (int col = 0; col < n && row < r; col++){
-            int p = row; while (p < r && M[p][col].compareTo(ZERO) == 0) p++;
+            int p = row; while (p < r && M[p][col].compareTo(ZERO)==0) p++;
             if (p == r) continue;
             if (p != row) { Fraction[] t = M[p]; M[p] = M[row]; M[row] = t; }
             Fraction diag = M[row][col];
             for (int j = col; j < n; j++) M[row][j] = M[row][j].divide(diag);
             for (int i = 0; i < r; i++) if (i != row){
                 Fraction f = M[i][col];
-                if (f.compareTo(ZERO) != 0)
+                if (f.compareTo(ZERO)!=0)
                     for (int j = col; j < n; j++) M[i][j] = M[i][j].subtract(f.multiply(M[row][j]));
             }
             lead[row] = col; row++;
@@ -219,7 +235,14 @@ final class FacetEnumerator {
         return sb.toString();
     }
 
-    // ---------- small utilities ----------
+    /** Canonical string of row (no sign flip), used as a final tie-break. */
+    private static String canonicalRow(Fraction[] row){
+        StringBuilder sb = new StringBuilder(row.length*8);
+        for (Fraction f : row) sb.append(f.toString()).append('|');
+        return sb.toString();
+    }
+
+    // ---------- small combinations & compares ----------
 
     private static int[] initComb(int k){ int[] a=new int[k]; for(int i=0;i<k;i++) a[i]=i; return a; }
     private static int[] nextComb(int[] a, int n, int k){
