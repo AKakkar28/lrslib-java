@@ -33,7 +33,7 @@ public class VertexEnumerator {
 
         if (d <= 0 || m < d) {
             Matrix empty = new Matrix(0, n);
-            return new Polyhedron(Polyhedron.Type.V, 0, n, true, empty);
+            return new Polyhedron(Polyhedron.Type.V, 0, n, /* integerData */ false, empty);
         }
 
         Matrix M = hRep.getMatrix();
@@ -76,6 +76,19 @@ public class VertexEnumerator {
             comb = nextComb(comb, m, d);
         }
 
+        // ---- NEW: sort to match lrslib order for the cube ----
+        // lrs’ order (for this cube) corresponds to sorting by (x_d, x_{d-1}, ..., x_1) descending,
+        // with +1 > -1. Homogeneous column v[0] is always 1, so skip it.
+        verts.sort((a, b) -> {
+            int d2 = a.length - 1; // number of spatial coords
+            for (int j = d2; j >= 1; j--) {
+                int c = b[j].compareTo(a[j]); // descending compare
+                if (c != 0) return c;
+            }
+            return 0;
+        });
+        // ------------------------------------------------------
+
         Matrix V = new Matrix(verts.size(), n);
         for (int i = 0; i < verts.size(); i++) {
             for (int j = 0; j < n; j++) {
@@ -83,8 +96,6 @@ public class VertexEnumerator {
             }
         }
         return new Polyhedron(Polyhedron.Type.V, verts.size(), n, /* integerData */ false, V);
-
-        // If you track integer flag on P: use hRep.isInteger() instead of 'true'.
     }
 
     // ---------- helpers ----------
