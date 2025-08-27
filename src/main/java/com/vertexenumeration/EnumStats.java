@@ -6,6 +6,7 @@ public final class EnumStats {
     public int bases;
     public int integerVertices;
     public int maxDepth;
+    public int[] lastCobasis;
 
     @Override public String toString() {
         return "*Totals: vertices=" + vertices +

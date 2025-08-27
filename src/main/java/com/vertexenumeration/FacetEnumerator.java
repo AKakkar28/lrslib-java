@@ -26,6 +26,16 @@ final class FacetEnumerator {
         }
     }
 
+    // Add a uniform entrypoint for V->H
+    public Polyhedron enumerate(Polyhedron V) {
+        Polyhedron out = fromV(V);   // <-- delegate to your existing method name
+        return out;
+    }
+
+    private EnumStats lastStats = null;
+    public EnumStats getLastStats() { return lastStats; }
+
+
     /** Convert V→H (supports rays). */
     static Polyhedron fromV(Polyhedron vRep) {
         final int m = vRep.getRowCount();
