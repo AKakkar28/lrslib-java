@@ -4,19 +4,16 @@ import java.util.*;
 
 public class VertexEnumerator {
 
-    // ----- stats hook (assumes you already have EnumStats printed by Main) -----
     private EnumStats lastStats = null;
     public EnumStats getLastStats() { return lastStats; }
 
-    // ----- public entrypoint -----
     public Polyhedron enumerate(Polyhedron input) {
         if (input.getType() == Polyhedron.Type.H) {
-            return enumerateFromH(input);   // H → V (already sets lastStats)
+            return enumerateFromH(input);   // H → V
         } else {
             // V → H
             Polyhedron out = FacetEnumerator.fromV(input);
 
-            // stats for V→H path (placeholder until full reverse-search implemented)
             lastStats = new EnumStats();
             lastStats.vertices = 0;
             lastStats.rays = 0;
@@ -28,127 +25,39 @@ public class VertexEnumerator {
         }
     }
 
-    // ----- ray record -----
-    static final class RayRec {
-        final Fraction[] ray;
-        final int[] tight;
-        final String key;
-        RayRec(Fraction[] ray, int[] tight, String key) {
-            this.ray = ray; this.tight = tight; this.key = key;
-        }
-    }
-
     private Polyhedron enumerateFromH(Polyhedron hRep) {
         final int m = hRep.getRowCount();
         final int n = hRep.getColCount(); // 1 + dim
         final int d = n - 1;
 
-        lastStats = new EnumStats();
-
         if (d <= 0 || m < d) {
             return new Polyhedron(Polyhedron.Type.V, 0, n, false, new Matrix(0, n));
         }
 
-        // H to array [b | A]
+        // Convert H-polyhedron into matrix
         Matrix Mm = hRep.getMatrix();
         Fraction[][] H = new Fraction[m][n];
         for (int i = 0; i < m; i++) for (int j = 0; j < n; j++) H[i][j] = Mm.get(i, j);
 
-        // ---- vertices via DFS over dictionaries ----
-        int[] rootBasis = findLexMinFeasibleBasis(H);
-        if (rootBasis == null) {
-            return new Polyhedron(Polyhedron.Type.V, 0, n, false, new Matrix(0, n));
-        }
+        // ---- delegate to ReverseSearchEnumerator ----
+        ReverseSearchEnumerator.Result res = new ReverseSearchEnumerator(H).run();
 
-        List<Fraction[]> verts = new ArrayList<>();
-        List<int[]> vertexBases = new ArrayList<>();
-        Deque<int[]> stack = new ArrayDeque<>();
-        Deque<Integer> depth = new ArrayDeque<>();
-        Set<String> seenBases = new HashSet<>();
+        this.lastStats = res.stats;
 
-        stack.push(rootBasis);
-        depth.push(0);
-
-        while (!stack.isEmpty()) {
-            int[] B = stack.pop();
-            int dep = depth.pop();
-            String kb = key(B);
-            if (!seenBases.add(kb)) continue;
-
-            SimplexDictionary dict = new SimplexDictionary(H, B);
-            Fraction[] x = dict.vertex();
-            Fraction[] homog = toHomogeneous(x);
-            verts.add(homog);
-            vertexBases.add(B.clone());
-
-            lastStats.bases++;
-            lastStats.vertices++;
-            if (isIntegerVertex(homog)) {
-                lastStats.integerVertices++;
-            }
-            if (dep > lastStats.maxDepth) lastStats.maxDepth = dep;
-
-            for (int[] child : dict.childrenBases()) {
-                SimplexDictionary cd = new SimplexDictionary(H, child);
-                int[] par = cd.parentBasis();
-                if (par != null && key(par).equals(kb)) {
-                    stack.push(child);
-                    depth.push(dep + 1);
-                }
-            }
-        }
-
-        // ---- enumerate extreme rays and keep their tight sets ----
+        // ---- rays ----
         List<RayRec> rays = enumerateExtremeRaysWithTightSets(H);
-
-        // ---- stats ----
         lastStats.rays = rays.size();
 
-        // ---- ordering shim (unchanged) ----
-        if (!verts.isEmpty()) {
-            boolean hasNegOne = false;
-            boolean onlyZeroOne = true;
-            for (Fraction[] v : verts) {
-                for (int j = 1; j < v.length; j++) {
-                    if (v[j].compareTo(Fraction.ZERO.subtract(Fraction.ONE)) == 0) hasNegOne = true;
-                    if (!(v[j].compareTo(Fraction.ZERO) == 0 || v[j].compareTo(Fraction.ONE) == 0)) {
-                        onlyZeroOne = false;
-                    }
-                }
-            }
-            if (hasNegOne) {
-                List<Fraction[]> oldVerts = new ArrayList<>(verts);
-                verts.sort((a, b) -> {
-                    int d2 = a.length - 1;
-                    for (int j = d2; j >= 1; j--) {
-                        int c = b[j].compareTo(a[j]);
-                        if (c != 0) return c;
-                    }
-                    return 0;
-                });
-                vertexBases = reorderBasesLikeVerts(vertexBases, oldVerts, verts);
-            } else if (onlyZeroOne) {
-                List<Fraction[]> oldVerts = new ArrayList<>(verts);
-                verts.sort((a, b) -> {
-                    for (int j = 1; j < a.length; j++) {
-                        int c = b[j].compareTo(a[j]);
-                        if (c != 0) return c;
-                    }
-                    return 0;
-                });
-                vertexBases = reorderBasesLikeVerts(vertexBases, oldVerts, verts);
-            }
-        }
+        // ---- vertices from reverse search ----
+        List<Fraction[]> verts = res.vertices;
+        List<int[]> vertexBases = new ArrayList<>(); // TODO: carry bases if needed
 
         // ---- attach rays ----
         Map<Integer, List<Fraction[]>> raysAt = new HashMap<>();
         for (int i = 0; i < verts.size(); i++) raysAt.put(i, new ArrayList<>());
         for (RayRec rr : rays) {
             int at = attachIndexForRay(H, vertexBases, rr.ray);
-            if (at < 0) {
-                at = findFirstVertexWithTightSubset(vertexBases, rr.tight);
-                if (at < 0) at = 0;
-            }
+            if (at < 0) at = 0;
             raysAt.get(at).add(rr.ray);
         }
 
@@ -171,23 +80,27 @@ public class VertexEnumerator {
             }
         }
 
-        // ensure stats are carried back
-        this.lastStats = lastStats;
-
         return new Polyhedron(Polyhedron.Type.V, totalRows, n, false, V);
     }
 
-    // ---- integer vertex check ----
+    // ---------- Support classes / methods ----------
+
+    static final class RayRec {
+        final Fraction[] ray;
+        final int[] tight;
+        final String key;
+        RayRec(Fraction[] ray, int[] tight, String key) {
+            this.ray = ray; this.tight = tight; this.key = key;
+        }
+    }
+
     private static boolean isIntegerVertex(Fraction[] v) {
         for (int j = 1; j < v.length; j++) {
-            if (!v[j].denominator().equals(java.math.BigInteger.ONE)) {
-                return false;
-            }
+            if (!v[j].denominator().equals(java.math.BigInteger.ONE)) return false;
         }
         return true;
     }
 
-    // ---- attach ray etc. (unchanged code continues) ----
     private static int attachIndexForRay(Fraction[][] H, List<int[]> vertexBases, Fraction[] ray) {
         final int d = H[0].length - 1;
         Fraction[] v = new Fraction[d];
@@ -218,55 +131,6 @@ public class VertexEnumerator {
         return s;
     }
 
-    private static boolean containsSubset(int[] sup, int[] sub) {
-        int i = 0, j = 0;
-        while (i < sup.length && j < sub.length) {
-            if (sup[i] == sub[j]) { i++; j++; }
-            else if (sup[i] < sub[j]) i++;
-            else return false;
-        }
-        return j == sub.length;
-    }
-
-    private static int findFirstVertexWithTightSubset(List<int[]> bases, int[] tight) {
-        for (int i = 0; i < bases.size(); i++) {
-            if (containsSubset(bases.get(i), tight)) return i;
-        }
-        return -1;
-    }
-
-    private static List<int[]> reorderBasesLikeVerts(List<int[]> basesInOldOrder,
-                                                     List<Fraction[]> oldVerts,
-                                                     List<Fraction[]> newVerts) {
-        Map<String, int[]> byKey = new HashMap<>();
-        for (int i = 0; i < oldVerts.size(); i++) {
-            byKey.put(vertexKeyFromVector(oldVerts.get(i)), basesInOldOrder.get(i));
-        }
-        List<int[]> out = new ArrayList<>(newVerts.size());
-        for (Fraction[] v : newVerts) out.add(byKey.get(vertexKeyFromVector(v)));
-        return out;
-    }
-
-    private static String vertexKeyFromVector(Fraction[] v) {
-        StringBuilder sb = new StringBuilder(v.length * 8);
-        for (Fraction f : v) sb.append(f.toString()).append('|');
-        return sb.toString();
-    }
-
-    private static Fraction[] toHomogeneous(Fraction[] x) {
-        Fraction[] v = new Fraction[x.length + 1];
-        v[0] = Fraction.ONE;
-        System.arraycopy(x, 0, v, 1, x.length);
-        return v;
-    }
-
-    private static String key(int[] rows) {
-        StringBuilder sb = new StringBuilder(rows.length * 3);
-        for (int r : rows) sb.append(r).append(',');
-        return sb.toString();
-    }
-
-    // ---- rays enumeration (unchanged) ----
     private List<RayRec> enumerateExtremeRaysWithTightSets(Fraction[][] H) {
         final int m = H.length, n = H[0].length, d = n - 1;
         if (d - 1 <= 0) return Collections.emptyList();
@@ -374,23 +238,6 @@ public class VertexEnumerator {
             sb.append(rj.toString()).append('|');
         }
         return sb.toString();
-    }
-
-    private static int[] findLexMinFeasibleBasis(Fraction[][] H) {
-        final int m = H.length, n = H[0].length, d = n - 1;
-        int[] comb = initComb(d);
-        while (comb != null) {
-            try {
-                SimplexDictionary D = new SimplexDictionary(H, comb);
-                boolean ok = true;
-                for (int i = 0; i < m; i++) {
-                    if (D.slack(i).compareTo(Fraction.ZERO) < 0) { ok = false; break; }
-                }
-                if (ok) return comb.clone();
-            } catch (Exception ignore) { }
-            comb = nextComb(comb, m, d);
-        }
-        return null;
     }
 
     private static int[] initComb(int k) { int[] a = new int[k]; for (int i = 0; i < k; i++) a[i] = i; return a; }
