@@ -4,13 +4,30 @@ public final class EnumStats {
     public int vertices;
     public int rays;
     public int bases;
+    public int facets;
     public int integerVertices;
     public int maxDepth;
     public int[] lastCobasis;
 
-    public void printVertexTotals() {
-        System.out.printf("*Totals: vertices=%d rays=%d bases=%d integer_vertices=%d%n",
-                vertices, rays, bases, integerVertices);
-        System.out.printf("*max_vertex_depth=%d%n", maxDepth);
+    private LrsDat.Mode mode;
+
+    public void setMode(LrsDat.Mode m) {
+        this.mode = m;
+    }
+
+    @Override
+    public String toString() {
+        if (mode == LrsDat.Mode.VE) {
+            return "*Totals: vertices=" + vertices +
+                    " rays=" + rays +
+                    " bases=" + bases +
+                    " integer_vertices=" + integerVertices +
+                    "  max_vertex_depth=" + maxDepth;
+        } else if (mode == LrsDat.Mode.CH) {
+            return "*Totals: facets=" + facets +
+                    " bases=" + bases;
+        } else {
+            return "*Totals: (unknown mode)";
+        }
     }
 }

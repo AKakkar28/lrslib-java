@@ -12,9 +12,10 @@ public class VertexEnumerator {
             return enumerateFromH(input);   // H → V
         } else {
             // V → H
-            Polyhedron out = FacetEnumerator.fromV(input);
+            FacetEnumerator enumerator = new FacetEnumerator();
+            Polyhedron out = enumerator.enumerate(input);
 
-            lastStats = new EnumStats();
+            lastStats = enumerator.getLastStats();
             lastStats.vertices = 0;
             lastStats.rays = 0;
             lastStats.bases = out.getRowCount();
@@ -79,6 +80,7 @@ public class VertexEnumerator {
                 }
             }
         }
+        lastStats.setMode(LrsDat.Mode.VE);
 
         return new Polyhedron(Polyhedron.Type.V, totalRows, n, false, V);
     }

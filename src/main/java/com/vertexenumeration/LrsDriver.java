@@ -59,7 +59,6 @@ public final class LrsDriver {
                     VertexEnumerator enumerator = new VertexEnumerator();
                     output = enumerator.enumerate(working);
                     stats = enumerator.getLastStats();
-                    // Write output in lrslib-compatible format
                     java.io.PrintWriter pw = new java.io.PrintWriter(System.out, true);
                     output.write(pw);
                     pw.flush();
@@ -69,9 +68,9 @@ public final class LrsDriver {
                     FacetEnumerator enumerator = new FacetEnumerator();
                     output = enumerator.enumerate(working);
                     stats = enumerator.getLastStats();
-                    try (java.io.PrintWriter pw = new java.io.PrintWriter(System.out)) {
-                        output.write(pw);
-                    }
+                    java.io.PrintWriter pw = new java.io.PrintWriter(System.out, true);
+                    output.write(pw);
+                    pw.flush();
                     break;
                 }
                 default:
@@ -81,15 +80,13 @@ public final class LrsDriver {
             final Instant t1 = Instant.now();
             double secs = Duration.between(t0, t1).toMillis() / 1000.0;
 
-            // 4) Print stats (mirrors lrslib totals; adjust fields as you add parity)
-            // After writing the output polyhedron
+            // 4) Print stats (enumerator already sets mode correctly)
             if (stats != null) {
-                if (dat.mode == LrsDat.Mode.VE) {
-                    stats.printVertexTotals();
-                }
+                System.out.println(stats);
+
                 if (dat.printCobasis && stats.lastCobasis != null) {
                     System.out.print("printcobasis 1\n");
-                    System.out.println(java.util.Arrays.toString(stats.lastCobasis));
+                    System.out.println(Arrays.toString(stats.lastCobasis));
                 }
             }
             System.out.printf("*elapsed time: %.3f seconds%n", secs);
@@ -102,12 +99,11 @@ public final class LrsDriver {
             System.err.println("I/O error: " + e.getMessage());
             return 1;
         } catch (RuntimeException e) {
-            // Use this block to map certain exceptions to a restart in the future
-            // (e.g., resource limits, user-requested checkpointing). For now, just report.
             System.err.println("*unrecoverable error: " + e.getMessage());
             return -1;
         }
     }
+
 
     /**
      * Utility that provides the same help text as your current Main. Kept separate
