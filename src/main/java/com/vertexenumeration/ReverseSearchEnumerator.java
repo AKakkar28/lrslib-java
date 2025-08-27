@@ -70,14 +70,16 @@ final class ReverseSearchEnumerator {
                 }
             }
         }
+
         verts.sort((a, b) -> {
-            for (int j = 1; j < a.length; j++) {
-                int cmp = b[j].compareTo(a[j]); // descending
+            // lrs prints vertices in descending order by coordinates,
+            // starting from the last coordinate toward the first
+            for (int j = a.length - 1; j >= 1; j--) {
+                int cmp = b[j].compareTo(a[j]); // notice: reversed
                 if (cmp != 0) return cmp;
             }
             return 0;
         });
-
 
         return new Result(verts, stats);
     }
