@@ -268,4 +268,84 @@ final class SimplexDictionary {
         for (int i=0;i<A.length;i++){ int c = A[i].compareTo(B[i]); if (c!=0) return c; }
         return 0;
     }
+
+    /** Returns list of extreme rays from this basis (homogenized form: [0 | r]). */
+    /** Returns list of extreme rays from this basis (homogenized form: [0 | r]). */
+    List<Fraction[]> rayDirections() {
+        List<Fraction[]> rays = new ArrayList<>();
+        BitSet inB = inBasis();
+        Fraction ZERO = H[0][0].subtract(H[0][0]);
+
+        for (int e = 0; e < m; e++) if (!inB.get(e)) {
+            // Candidate direction: solve B * dx = -a_e
+            Fraction[] a_e = new Fraction[d];
+            for (int j = 0; j < d; j++) a_e[j] = H[e][j + 1];
+            Fraction[] dx = solveWithBinv(negate(a_e));
+
+            // Homogenized ray: [0 | dx]
+            Fraction[] ray = new Fraction[d + 1];
+            ray[0] = ZERO;
+            System.arraycopy(dx, 0, ray, 1, d);
+
+            // Feasibility check:
+            // - a_e·dx == 0 (entering row tight)
+            // - all other nonbasic rows j ≠ e: a_j·dx >= 0
+            boolean feasible = true;
+            if (!dotRowA(e, dx).equals(ZERO)) feasible = false;
+            for (int j = 0; j < m && feasible; j++) {
+                if (inB.get(j) || j == e) continue;
+                if (dotRowA(j, dx).compareTo(ZERO) < 0) feasible = false;
+            }
+
+            if (feasible) {
+                rays.add(canonicalizeRay(ray));
+            }
+        }
+        return rays;
+    }
+
+
+    /** Normalize ray: divide out gcd, flip sign if needed so first nonzero > 0. */
+    /** Normalize ray: divide out gcd, flip sign so first nonzero > 0. */
+    private static Fraction[] canonicalizeRay(Fraction[] r) {
+        int n = r.length;
+        Fraction ZERO = r[0].subtract(r[0]);
+
+        // Find first nonzero coordinate (ignoring homogeneous 0)
+        int first = -1;
+        for (int j = 1; j < n; j++) {
+            if (!r[j].equals(ZERO)) { first = j; break; }
+        }
+        if (first == -1) return r.clone(); // zero ray (shouldn't happen)
+
+        // Collect numerators/denominators to compute gcd
+        java.math.BigInteger g = java.math.BigInteger.ZERO;
+        for (int j = 1; j < n; j++) {
+            java.math.BigInteger num = r[j].numerator().abs();
+            if (!num.equals(java.math.BigInteger.ZERO)) {
+                g = (g.equals(java.math.BigInteger.ZERO)) ? num : g.gcd(num);
+            }
+        }
+
+        Fraction[] out = new Fraction[n];
+        if (!g.equals(java.math.BigInteger.ZERO)) {
+            for (int j = 0; j < n; j++) {
+                out[j] = new Fraction(r[j].numerator().divide(g), r[j].denominator());
+            }
+        } else {
+            System.arraycopy(r, 0, out, 0, n);
+        }
+
+        // Flip sign if first nonzero < 0
+        if (out[first].compareTo(ZERO) < 0) {
+            for (int j = 0; j < n; j++) {
+                out[j] = out[j].negate();
+            }
+        }
+
+        return out;
+    }
+
+
+
 }
