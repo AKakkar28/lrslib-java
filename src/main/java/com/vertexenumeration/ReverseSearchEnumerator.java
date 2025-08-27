@@ -119,72 +119,122 @@ final class ReverseSearchEnumerator {
         return true;
     }
 
+
     /** Phase I simplex: find a feasible basis like lrs_getfirstbasis. */
     private static int[] findFirstBasisPhaseI(Fraction[][] H) {
         final int m = H.length, n = H[0].length, d = n - 1;
 
-        // Step 1: try trivial lex-min basis first
+        // Step 1: try trivial lex-min basis
         int[] comb = initComb(d);
         try {
             SimplexDictionary D = new SimplexDictionary(H, comb);
             boolean ok = true;
             for (int i = 0; i < m; i++) {
-                if (D.slack(i).compareTo(Fraction.ZERO) < 0) {
-                    ok = false; break;
-                }
+                if (D.slack(i).compareTo(Fraction.ZERO) < 0) { ok = false; break; }
             }
             if (ok) return comb.clone();
         } catch (Exception ignore) {}
 
-        // Step 2: build Phase I system with artificial variable
-        Fraction[][] Hphase = new Fraction[m][n + 1];
+        // Step 2: Build Phase I system with artificial rows
+        Fraction[][] Hphase = new Fraction[m + d][n];
         for (int i = 0; i < m; i++) {
             System.arraycopy(H[i], 0, Hphase[i], 0, n);
-            Hphase[i][n] = Fraction.ONE; // artificial col
+        }
+        for (int i = 0; i < d; i++) {
+            Hphase[m + i] = new Fraction[n];
+            Arrays.fill(Hphase[m + i], Fraction.ZERO);
+            Hphase[m + i][0] = Fraction.ONE;        // slack constant
+            Hphase[m + i][i + 1] = Fraction.ONE;    // unit vector
         }
 
-        int dPhase = d + 1;
-        int[] basis = new int[dPhase];
-        for (int i = 0; i < dPhase; i++) basis[i] = i;
+        int mPhase = Hphase.length;
 
-        SimplexDictionary dict = new SimplexDictionary(Hphase, basis);
+        // Step 3: pick an initial nonsingular basis among artificials
+        int[] basis = null;
+        SimplexDictionary dict = null;
+        outer:
+        for (int[] cand = initComb(d); cand != null; cand = nextComb(cand, mPhase, d)) {
+            try {
+                dict = new SimplexDictionary(Hphase, cand);
+                basis = cand.clone();
+                break outer;
+            } catch (RuntimeException ex) {
+                // Singular, skip
+            }
+        }
+        if (basis == null) {
+            System.err.println("*unrecoverable error: no nonsingular artificial basis found");
+            return null;
+        }
 
-        // Step 3: pivot to remove negative slacks
-        boolean changed = true;
-        while (changed) {
-            changed = false;
+        // Step 4: pivot artificials out if possible
+        boolean progress = true;
+        while (progress) {
+            progress = false;
+
+            // if all slacks nonnegative in original rows, done
+            boolean feasible = true;
+            for (int i = 0; i < m; i++) {
+                if (dict.slack(i).compareTo(Fraction.ZERO) < 0) {
+                    feasible = false;
+                    break;
+                }
+            }
+            if (feasible) break;
+
+            // try to swap out artificial rows with violating original constraints
             for (int e = 0; e < m; e++) {
                 if (dict.slack(e).compareTo(Fraction.ZERO) < 0) {
-                    int leave = chooseLeaving(dict, e);
+                    int leave = dict.leavingFor(e);
                     if (leave >= 0) {
                         basis[leave] = e;
                         Arrays.sort(basis);
                         dict = new SimplexDictionary(Hphase, basis);
-                        changed = true;
+                        progress = true;
+                        break;
                     }
                 }
             }
-        }
 
-        // Step 4: check feasibility in original system
-        for (int i = 0; i < m; i++) {
-            if (dict.slack(i).compareTo(Fraction.ZERO) < 0) {
-                return null; // infeasible
+            if (!progress) {
+                System.err.println("*unrecoverable error: infeasible system");
+                return null;
             }
         }
 
-        // Ensure artificial variable is not in basis
-        for (int row : basis) {
-            if (row == n) return null;
+        // Step 5: project back to original system (drop artificial rows)
+        int[] finalBasis = new int[d];
+        int idx = 0;
+        for (int b : basis) {
+            if (b < m) { // keep only original rows
+                if (idx < d) finalBasis[idx++] = b;
+            }
+        }
+        if (idx != d) {
+            System.err.println("*unrecoverable error: artificial still in basis");
+            return null;
         }
 
-        // Step 5: project back to original system
-        int[] finalBasis = new int[d];
-        System.arraycopy(basis, 0, finalBasis, 0, d);
         Arrays.sort(finalBasis);
-
         return finalBasis;
     }
+
+
+
+    /**
+     * Pick entering variable for Phase I: artificial column n.
+     * Returns -1 if none can improve objective.
+     */
+    private static int chooseEnteringArtificial(SimplexDictionary dict, int artificialCol) {
+        // Try to force artificial variable out of basis
+        for (int e = 0; e < dict.basis().length; e++) {
+            if (dict.basis()[e] == artificialCol) {
+                return artificialCol;
+            }
+        }
+        return -1; // artificial already out of basis
+    }
+
 
     /** Ratio rule to pick leaving row. */
     private static int chooseLeaving(SimplexDictionary dict, int entering) {

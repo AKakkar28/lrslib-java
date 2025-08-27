@@ -40,6 +40,10 @@ final class SimplexDictionary {
         this.Binv = invert(B);
         // x solves B x = -b_B
         this.x = solve(B, negate(bB));
+        if (this.x == null) {
+            throw new RuntimeException("Refactor failed: singular basis " + Arrays.toString(basis));
+        }
+
     }
 
     /** Slack of row i at current x: b_i + a_i·x */
@@ -108,7 +112,7 @@ final class SimplexDictionary {
 
 
     /** Compute leaving row index in basis for entering e using a lexicographic ratio rule. */
-    private int leavingFor(int e) {
+    public int leavingFor(int e) {
         // Direction: B * dx = -a_e
         Fraction[] a_e = new Fraction[d];
         for (int j = 0; j < d; j++) a_e[j] = H[e][j + 1];
@@ -177,89 +181,133 @@ final class SimplexDictionary {
     }
 
 
-    private static Fraction[] solve(Fraction[][] A, Fraction[] b){
+    private static Fraction[] solve(Fraction[][] A, Fraction[] b) {
         int n = b.length;
         Fraction ZERO = b[0].subtract(b[0]);
-        Fraction[][] M = new Fraction[n][n+1];
-        for (int i=0;i<n;i++){ System.arraycopy(A[i],0,M[i],0,n); M[i][n]=b[i]; }
-        int r = 0;
-        for (int c = 0; c < n && r < n; c++){
-            int p=r; while(p<n && M[p][c].compareTo(ZERO)==0) p++;
-            if (p==n) continue;
-            if (p!=r){ Fraction[] t=M[p]; M[p]=M[r]; M[r]=t; }
-            Fraction diag = M[r][c];
-            for (int j=c;j<=n;j++) M[r][j]=M[r][j].divide(diag);
-            for (int i2=0;i2<n;i2++) if (i2!=r){
-                Fraction f = M[i2][c];
-                if (f.compareTo(ZERO)!=0) for (int j=c;j<=n;j++) M[i2][j]=M[i2][j].subtract(f.multiply(M[r][j]));
-            }
-            r++;
-        }
-        Fraction[] x = new Fraction[n];
-        for (int i=0;i<n;i++){ int lead=-1; for(int j=0;j<n;j++) if(M[i][j].compareTo(ZERO)!=0){lead=j;break;} if(lead==-1) return null; x[lead]=M[i][n]; }
-        for (int i=0;i<n;i++) if (x[i]==null) return null;
-        return x;
-    }
+        Fraction[][] M = new Fraction[n][n + 1];
 
-    private static Fraction[][] invert(Fraction[][] B){
-        int n = B.length;
-        // Build ZERO and ONE robustly
-        Fraction ZERO = B[0][0].subtract(B[0][0]);
-        Fraction ONE = null;
-        outer:
+        // build augmented matrix
         for (int i = 0; i < n; i++) {
-            for (int j = 0; j < n; j++) {
-                if (B[i][j].compareTo(ZERO) != 0) {
-                    ONE = B[i][j].divide(B[i][j]); // non-zero / itself = 1
-                    break outer;
-                }
-            }
-        }
-        if (ONE == null) {
-            // Matrix is all zeros -> singular; let caller handle via later failure
-            // but avoid 0/0 here by fabricating ONE as ZERO-ZERO+ZERO... can't.
-            // Better: throw to signal singular immediately.
-            throw new ArithmeticException("Singular matrix in invert(): all zeros");
+            System.arraycopy(A[i], 0, M[i], 0, n);
+            M[i][n] = b[i];
         }
 
-        // Augment [B | I]
-        Fraction[][] M = new Fraction[n][2*n];
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < n; j++) M[i][j] = B[i][j];
-            for (int j = 0; j < n; j++) M[i][n + j] = (i == j) ? ONE : ZERO;
-        }
+        int[] colPerm = new int[n];
+        for (int j = 0; j < n; j++) colPerm[j] = j;
 
-        // Gauss–Jordan
-        int r = 0;
-        for (int c = 0; c < n && r < n; c++) {
-            int p = r;
-            while (p < n && M[p][c].compareTo(ZERO) == 0) p++;
-            if (p == n) continue;             // no pivot in this column
-            if (p != r) { Fraction[] t = M[p]; M[p] = M[r]; M[r] = t; }
-
-            Fraction diag = M[r][c];
-            // normalize pivot row
-            for (int j = c; j < 2*n; j++) M[r][j] = M[r][j].divide(diag);
-
-            // eliminate others
-            for (int i2 = 0; i2 < n; i2++) if (i2 != r) {
-                Fraction f = M[i2][c];
-                if (f.compareTo(ZERO) != 0) {
-                    for (int j = c; j < 2*n; j++) {
-                        M[i2][j] = M[i2][j].subtract(f.multiply(M[r][j]));
+        // Gaussian elimination with full pivoting
+        for (int k = 0; k < n; k++) {
+            // find pivot (max abs entry among submatrix)
+            int pivRow = -1, pivCol = -1;
+            outer:
+            for (int i = k; i < n; i++) {
+                for (int j = k; j < n; j++) {
+                    if (M[i][j].compareTo(ZERO) != 0) {
+                        pivRow = i; pivCol = j; break outer;
                     }
                 }
             }
-            r++;
+            if (pivRow == -1) throw new ArithmeticException("Singular system in solve()");
+
+            // swap rows
+            if (pivRow != k) {
+                Fraction[] tmp = M[pivRow]; M[pivRow] = M[k]; M[k] = tmp;
+            }
+            // swap columns (track permutation)
+            if (pivCol != k) {
+                for (int i = 0; i < n; i++) {
+                    Fraction tmp = M[i][pivCol]; M[i][pivCol] = M[i][k]; M[i][k] = tmp;
+                }
+                int tmpIdx = colPerm[pivCol]; colPerm[pivCol] = colPerm[k]; colPerm[k] = tmpIdx;
+            }
+
+            // normalize pivot row
+            Fraction diag = M[k][k];
+            for (int j = k; j <= n; j++) M[k][j] = M[k][j].divide(diag);
+
+            // eliminate others
+            for (int i = 0; i < n; i++) if (i != k) {
+                Fraction f = M[i][k];
+                if (f.compareTo(ZERO) != 0) {
+                    for (int j = k; j <= n; j++) {
+                        M[i][j] = M[i][j].subtract(f.multiply(M[k][j]));
+                    }
+                }
+            }
         }
 
-        // Extract inverse
+        // extract solution with column permutation reversed
+        Fraction[] x = new Fraction[n];
+        for (int i = 0; i < n; i++) x[colPerm[i]] = M[i][n];
+        return x;
+    }
+
+
+
+    private static Fraction[][] invert(Fraction[][] B) {
+        int n = B.length;
+        Fraction ZERO = B[0][0].subtract(B[0][0]);
+
+        // augmented [B | I]
+        Fraction[][] M = new Fraction[n][2 * n];
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) M[i][j] = B[i][j];
+            for (int j = 0; j < n; j++) M[i][n + j] = (i == j ? Fraction.ONE : ZERO);
+        }
+
+        int[] colPerm = new int[n];
+        for (int j = 0; j < n; j++) colPerm[j] = j;
+
+        // full pivoting
+        for (int k = 0; k < n; k++) {
+            int pivRow = -1, pivCol = -1;
+            outer:
+            for (int i = k; i < n; i++) {
+                for (int j = k; j < n; j++) {
+                    if (!M[i][j].equals(ZERO)) {
+                        pivRow = i; pivCol = j; break outer;
+                    }
+                }
+            }
+            if (pivRow == -1) throw new ArithmeticException("Singular matrix in invert()");
+
+            // row swap
+            if (pivRow != k) {
+                Fraction[] tmp = M[pivRow]; M[pivRow] = M[k]; M[k] = tmp;
+            }
+            // col swap (and track)
+            if (pivCol != k) {
+                for (int i = 0; i < n; i++) {
+                    Fraction tmp = M[i][pivCol]; M[i][pivCol] = M[i][k]; M[i][k] = tmp;
+                }
+                int tmpIdx = colPerm[pivCol]; colPerm[pivCol] = colPerm[k]; colPerm[k] = tmpIdx;
+            }
+
+            // normalize pivot row
+            Fraction diag = M[k][k];
+            for (int j = k; j < 2 * n; j++) M[k][j] = M[k][j].divide(diag);
+
+            // eliminate
+            for (int i = 0; i < n; i++) if (i != k) {
+                Fraction f = M[i][k];
+                if (!f.equals(ZERO)) {
+                    for (int j = k; j < 2 * n; j++) {
+                        M[i][j] = M[i][j].subtract(f.multiply(M[k][j]));
+                    }
+                }
+            }
+        }
+
+        // extract inverse with column permutation
         Fraction[][] inv = new Fraction[n][n];
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j < n; j++)
-                inv[i][j] = M[i][n + j];
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                inv[colPerm[j]][i] = M[i][n + j]; // note permuted
+            }
+        }
         return inv;
     }
+
 
 
     private BitSet inBasis(){ BitSet bs=new BitSet(m); for(int r:basis) bs.set(r); return bs; }
