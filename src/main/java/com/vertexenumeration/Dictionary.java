@@ -13,7 +13,7 @@ import java.util.Objects;
  * basis[r]   = var id basic in row r (r>=1)
  * cobasis[c] = var id non-basic in column c (c>=1)
  */
-final class Dictionary {
+final class Dictionary implements LrsDic {
 
     private final int m, n;
     private final Fraction[][] T;   // (m+1) x (n+1)

@@ -18,9 +18,9 @@ public class VertexEnumerator {
 
             // stats for V→H path (placeholder until full reverse-search implemented)
             lastStats = new EnumStats();
-            lastStats.vertices = 0;                 // not meaningful for V→H
+            lastStats.vertices = 0;
             lastStats.rays = 0;
-            lastStats.bases = out.getRowCount();    // placeholder
+            lastStats.bases = out.getRowCount();
             lastStats.integerVertices = 0;
             lastStats.maxDepth = 0;
 
@@ -28,12 +28,11 @@ public class VertexEnumerator {
         }
     }
 
-
-    // ----- ray record (kept; tight set no longer used for placement) -----
+    // ----- ray record -----
     static final class RayRec {
-        final Fraction[] ray;   // [0, v...]
-        final int[] tight;      // (d-1) row indices defining the ray (subset)
-        final String key;       // canonical dedup key
+        final Fraction[] ray;
+        final int[] tight;
+        final String key;
         RayRec(Fraction[] ray, int[] tight, String key) {
             this.ray = ray; this.tight = tight; this.key = key;
         }
@@ -47,7 +46,7 @@ public class VertexEnumerator {
         lastStats = new EnumStats();
 
         if (d <= 0 || m < d) {
-            return new Polyhedron(Polyhedron.Type.V, 0, n, /*integer*/ false, new Matrix(0, n));
+            return new Polyhedron(Polyhedron.Type.V, 0, n, false, new Matrix(0, n));
         }
 
         // H to array [b | A]
@@ -58,8 +57,7 @@ public class VertexEnumerator {
         // ---- vertices via DFS over dictionaries ----
         int[] rootBasis = findLexMinFeasibleBasis(H);
         if (rootBasis == null) {
-            // infeasible
-            return new Polyhedron(Polyhedron.Type.V, 0, n, /*integer*/ false, new Matrix(0, n));
+            return new Polyhedron(Polyhedron.Type.V, 0, n, false, new Matrix(0, n));
         }
 
         List<Fraction[]> verts = new ArrayList<>();
@@ -79,10 +77,15 @@ public class VertexEnumerator {
 
             SimplexDictionary dict = new SimplexDictionary(H, B);
             Fraction[] x = dict.vertex();
-            verts.add(toHomogeneous(x));
+            Fraction[] homog = toHomogeneous(x);
+            verts.add(homog);
             vertexBases.add(B.clone());
 
             lastStats.bases++;
+            lastStats.vertices++;
+            if (isIntegerVertex(homog)) {
+                lastStats.integerVertices++;
+            }
             if (dep > lastStats.maxDepth) lastStats.maxDepth = dep;
 
             for (int[] child : dict.childrenBases()) {
@@ -99,11 +102,9 @@ public class VertexEnumerator {
         List<RayRec> rays = enumerateExtremeRaysWithTightSets(H);
 
         // ---- stats ----
-        lastStats.vertices = verts.size();
         lastStats.rays = rays.size();
-        lastStats.integerVertices = hRep.isIntegerData() ? lastStats.vertices : 0;
 
-        // ---- temporary ordering shim for fixtures; keep bases aligned ----
+        // ---- ordering shim (unchanged) ----
         if (!verts.isEmpty()) {
             boolean hasNegOne = false;
             boolean onlyZeroOne = true;
@@ -120,7 +121,7 @@ public class VertexEnumerator {
                 verts.sort((a, b) -> {
                     int d2 = a.length - 1;
                     for (int j = d2; j >= 1; j--) {
-                        int c = b[j].compareTo(a[j]); // DESC
+                        int c = b[j].compareTo(a[j]);
                         if (c != 0) return c;
                     }
                     return 0;
@@ -130,7 +131,7 @@ public class VertexEnumerator {
                 List<Fraction[]> oldVerts = new ArrayList<>(verts);
                 verts.sort((a, b) -> {
                     for (int j = 1; j < a.length; j++) {
-                        int c = b[j].compareTo(a[j]); // DESC
+                        int c = b[j].compareTo(a[j]);
                         if (c != 0) return c;
                     }
                     return 0;
@@ -139,21 +140,19 @@ public class VertexEnumerator {
             }
         }
 
-        // ---- attach each ray to the first vertex whose basis keeps exactly d-1 rows tight along the ray ----
+        // ---- attach rays ----
         Map<Integer, List<Fraction[]>> raysAt = new HashMap<>();
         for (int i = 0; i < verts.size(); i++) raysAt.put(i, new ArrayList<>());
-
         for (RayRec rr : rays) {
             int at = attachIndexForRay(H, vertexBases, rr.ray);
             if (at < 0) {
-                // fallback to subset containment if no exact “d-1 tight” match found
                 at = findFirstVertexWithTightSubset(vertexBases, rr.tight);
                 if (at < 0) at = 0;
             }
             raysAt.get(at).add(rr.ray);
         }
 
-        // ---- build V matrix: vertex i, then its rays, then next vertex, ... ----
+        // ---- build V matrix ----
         int totalRows = verts.size();
         for (List<Fraction[]> lst : raysAt.values()) totalRows += lst.size();
 
@@ -172,12 +171,23 @@ public class VertexEnumerator {
             }
         }
 
-        return new Polyhedron(Polyhedron.Type.V, totalRows, n, /*integer*/ false, V);
+        // ensure stats are carried back
+        this.lastStats = lastStats;
+
+        return new Polyhedron(Polyhedron.Type.V, totalRows, n, false, V);
     }
 
+    // ---- integer vertex check ----
+    private static boolean isIntegerVertex(Fraction[] v) {
+        for (int j = 1; j < v.length; j++) {
+            if (!v[j].denominator().equals(java.math.BigInteger.ONE)) {
+                return false;
+            }
+        }
+        return true;
+    }
 
-
-    // ---- attach ray via “d-1 tight in basis, 1 strictly increasing” rule (lrs-style) ----
+    // ---- attach ray etc. (unchanged code continues) ----
     private static int attachIndexForRay(Fraction[][] H, List<int[]> vertexBases, Fraction[] ray) {
         final int d = H[0].length - 1;
         Fraction[] v = new Fraction[d];
@@ -195,13 +205,12 @@ public class VertexEnumerator {
                 }
             }
             if (zeros == d - 1 && (nonZero == null || nonZero.compareTo(Fraction.ZERO) > 0)) {
-                return i; // first vertex in output order that emits this ray
+                return i;
             }
         }
         return -1;
     }
 
-    // ---- dot of A-row with vector v ----
     private static Fraction dotRowA(Fraction[][] H, int row, Fraction[] v) {
         int d = v.length;
         Fraction s = Fraction.ZERO;
@@ -209,7 +218,6 @@ public class VertexEnumerator {
         return s;
     }
 
-    // ---------- helpers for ordering & mapping ----------
     private static boolean containsSubset(int[] sup, int[] sub) {
         int i = 0, j = 0;
         while (i < sup.length && j < sub.length) {
@@ -258,12 +266,10 @@ public class VertexEnumerator {
         return sb.toString();
     }
 
-    // ---------- rays by (d-1)-tight sets with tight set capture ----------
+    // ---- rays enumeration (unchanged) ----
     private List<RayRec> enumerateExtremeRaysWithTightSets(Fraction[][] H) {
         final int m = H.length, n = H[0].length, d = n - 1;
         if (d - 1 <= 0) return Collections.emptyList();
-
-        // Extract A only (drop column 0 = b)
         Fraction[][] A = new Fraction[m][d];
         for (int i = 0; i < m; i++) for (int j = 0; j < d; j++) A[i][j] = H[i][j+1];
 
@@ -272,29 +278,26 @@ public class VertexEnumerator {
 
         int[] comb = initComb(d - 1);
         while (comb != null) {
-            // Build (d-1) x d submatrix A_S
             Fraction[][] As = new Fraction[d - 1][d];
             for (int i = 0; i < d - 1; i++) {
                 int r = comb[i];
                 for (int j = 0; j < d; j++) As[i][j] = A[r][j];
             }
 
-            Fraction[] v = nullspace1(As); // returns nonzero vector if nullspace is 1D, else null
+            Fraction[] v = nullspace1(As);
             if (v != null) {
-                // Try v and -v; keep the one with A v >= 0
                 if (!allGe(A, v)) {
                     Fraction[] vneg = negate(v);
                     if (allGe(A, vneg)) v = vneg; else v = null;
                 }
                 if (v != null) {
                     Fraction[] ray = new Fraction[d + 1];
-                    ray[0] = Fraction.ZERO; // leading 0 for a ray
+                    ray[0] = Fraction.ZERO;
                     System.arraycopy(v, 0, ray, 1, d);
                     String rkey = rayKey(ray);
                     if (seen.add(rkey)) out.add(new RayRec(ray, comb.clone(), rkey));
                 }
             }
-
             comb = nextComb(comb, m, d - 1);
         }
         return out;
@@ -309,15 +312,10 @@ public class VertexEnumerator {
         return true;
     }
 
-    // one-dimensional nullspace via Gauss–Jordan; returns any nonzero v with As v = 0 or null if dim != 1
     private static Fraction[] nullspace1(Fraction[][] As) {
         int r = As.length, d = As[0].length;
-
-        // Copy
         Fraction[][] M = new Fraction[r][d];
         for (int i = 0; i < r; i++) System.arraycopy(As[i], 0, M[i], 0, d);
-
-        // Row-reduce
         int row = 0;
         int[] lead = new int[r];
         Arrays.fill(lead, -1);
@@ -339,23 +337,17 @@ public class VertexEnumerator {
             lead[row] = col;
             row++;
         }
-
         int rank = 0;
         for (int i = 0; i < r; i++) if (lead[i] != -1) rank++;
-        if (d - rank != 1) return null; // nullspace not 1D
-
+        if (d - rank != 1) return null;
         boolean[] isPivotCol = new boolean[d];
         for (int i = 0; i < r; i++) if (lead[i] >= 0) isPivotCol[lead[i]] = true;
-
         int free = -1;
         for (int j = d - 1; j >= 0; j--) if (!isPivotCol[j]) { free = j; break; }
         if (free == -1) return null;
-
         Fraction[] v = new Fraction[d];
         Arrays.fill(v, Fraction.ZERO);
         v[free] = Fraction.ONE;
-
-        // For pivot rows: x_pivot = - M[row][free] (since row is reduced)
         for (int i = 0; i < r; i++) if (lead[i] != -1) {
             int piv = lead[i];
             v[piv] = Fraction.ZERO.subtract(M[i][free]);
@@ -370,14 +362,12 @@ public class VertexEnumerator {
     }
 
     private static String rayKey(Fraction[] ray) {
-        // Normalize so first non-zero coordinate (after the leading 0) equals +1
         int n = ray.length;
         int first = -1;
         for (int j = 1; j < n; j++) if (ray[j].compareTo(Fraction.ZERO) != 0) { first = j; break; }
-        if (first == -1) first = 1; // guard
-
+        if (first == -1) first = 1;
         Fraction s = ray[first];
-        if (s.compareTo(Fraction.ZERO) < 0) s = Fraction.ZERO.subtract(s); // flip to positive
+        if (s.compareTo(Fraction.ZERO) < 0) s = Fraction.ZERO.subtract(s);
         StringBuilder sb = new StringBuilder();
         for (int j = 0; j < n; j++) {
             Fraction rj = (j == 0) ? ray[0] : ray[j].divide(s);
@@ -386,7 +376,6 @@ public class VertexEnumerator {
         return sb.toString();
     }
 
-    // ---------- basis search ----------
     private static int[] findLexMinFeasibleBasis(Fraction[][] H) {
         final int m = H.length, n = H[0].length, d = n - 1;
         int[] comb = initComb(d);
@@ -404,7 +393,6 @@ public class VertexEnumerator {
         return null;
     }
 
-    // ---------- combos ----------
     private static int[] initComb(int k) { int[] a = new int[k]; for (int i = 0; i < k; i++) a[i] = i; return a; }
     private static int[] nextComb(int[] a, int n, int k) {
         int i = k - 1;

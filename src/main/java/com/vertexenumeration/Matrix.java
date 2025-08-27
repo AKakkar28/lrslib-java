@@ -16,6 +16,8 @@ public class Matrix {
     private final int cols;
     private final Fraction[][] data;
 
+    public int rows() { return rows; }
+    public int cols() { return cols; }
     /**
      * Constructs a {@code rows × cols} matrix with all entries set to
      * zero.
