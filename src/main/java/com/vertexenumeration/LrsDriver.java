@@ -60,9 +60,9 @@ public final class LrsDriver {
                     output = enumerator.enumerate(working);
                     stats = enumerator.getLastStats();
                     // Write output in lrslib-compatible format
-                    try (java.io.PrintWriter pw = new java.io.PrintWriter(System.out)) {
-                        output.write(pw);
-                    }
+                    java.io.PrintWriter pw = new java.io.PrintWriter(System.out, true);
+                    output.write(pw);
+                    pw.flush();
                     break;
                 }
                 case CH: { // V -> H (facet enumeration)
@@ -82,13 +82,14 @@ public final class LrsDriver {
             double secs = Duration.between(t0, t1).toMillis() / 1000.0;
 
             // 4) Print stats (mirrors lrslib totals; adjust fields as you add parity)
+            // After writing the output polyhedron
             if (stats != null) {
-                // Basic totals (extend as you wire more counters)
-                System.out.printf("*Totals: vertices=%d rays=%d bases=%d integer_vertices=%d%n",
-                        stats.vertices, stats.rays, stats.bases, stats.integerVertices);
+                if (dat.mode == LrsDat.Mode.VE) {
+                    stats.printVertexTotals();
+                }
                 if (dat.printCobasis && stats.lastCobasis != null) {
                     System.out.print("printcobasis 1\n");
-                    System.out.println(Arrays.toString(stats.lastCobasis));
+                    System.out.println(java.util.Arrays.toString(stats.lastCobasis));
                 }
             }
             System.out.printf("*elapsed time: %.3f seconds%n", secs);

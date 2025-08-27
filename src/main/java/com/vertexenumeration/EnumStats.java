@@ -8,11 +8,9 @@ public final class EnumStats {
     public int maxDepth;
     public int[] lastCobasis;
 
-    @Override public String toString() {
-        return "*Totals: vertices=" + vertices +
-                " rays=" + rays +
-                " bases=" + bases +
-                " integer_vertices=" + integerVertices +
-                "  max_vertex_depth=" + maxDepth;
+    public void printVertexTotals() {
+        System.out.printf("*Totals: vertices=%d rays=%d bases=%d integer_vertices=%d%n",
+                vertices, rays, bases, integerVertices);
+        System.out.printf("*max_vertex_depth=%d%n", maxDepth);
     }
 }
