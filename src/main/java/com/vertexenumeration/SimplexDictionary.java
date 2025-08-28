@@ -155,7 +155,6 @@ final class SimplexDictionary {
 
 
     /** Lex parent = lexicographically smallest neighbor strictly less than this basis. */
-    /** Lex parent = lexicographically smallest neighbor strictly less than this basis. */
     int[] parentBasis() {
         int[] best = null;
         for (int[] nb : childrenBases()) {
@@ -192,34 +191,38 @@ final class SimplexDictionary {
 
 
 
-    /** Compute leaving row index in basis for entering e using a lexicographic ratio rule. */
+    /**
+     * Lexicographic ratio test (lrslib’s lrs_lexminratio).
+     * Returns index of leaving row in the basis, or -1 if none.
+     */
     public int leavingFor(int e) {
-        // Direction: B * dx = -a_e
         Fraction[] a_e = new Fraction[d];
         for (int j = 0; j < d; j++) a_e[j] = H[e][j + 1];
+
+        // Direction dx = -B^{-1} a_e
         Fraction[] dx = solveWithBinv(negate(a_e));
+        Fraction se = slack(e);
 
         int leave = -1;
-        Fraction bestT = null;
-        int bestIdx = Integer.MAX_VALUE;
-        Fraction ZERO = zero(a_e[0]);
+        Fraction[] bestLex = null;
 
-        // For each basic row, compute a_r · dx (change in its slack).
-        // Choose the lexicographically best ratio (t, idx) where t = se / (a_e · dx)
-        // and a_r · dx > 0 (keeps feasibility when moving to make s_e -> 0).
         for (int i = 0; i < d; i++) {
             int r = basis[i];
-            Fraction delta = dotRowA(r, dx);              // a_r · dx
-            if (delta.compareTo(ZERO) > 0) {
-                Fraction se = slack(e);                   // current nonbasic slack
-                Fraction denom = dotRowA(e, dx);         // a_e · dx
-                if (denom.compareTo(ZERO) == 0) continue; // parallel, no pivot
-                Fraction t = se.divide(denom);           // step to drive s_e to 0
-                if (betterRatio(t, i, bestT, bestIdx)) {
-                    leave = i;
-                    bestT = t;
-                    bestIdx = i;
-                }
+
+            // Δs_r = a_r · dx
+            Fraction delta = dotRowA(r, dx);
+            if (delta.compareTo(Fraction.ZERO) <= 0) continue; // must improve slack
+
+            // Lex ratio vector: [ t , row of B^{-1} ]
+            // where t = s_e / delta
+            Fraction t = se.divide(delta);
+            Fraction[] ratioVec = new Fraction[d + 1];
+            ratioVec[0] = t;
+            System.arraycopy(Binv[i], 0, ratioVec, 1, d);
+
+            if (bestLex == null || lexFrac(ratioVec, bestLex) < 0) {
+                bestLex = ratioVec;
+                leave = i;
             }
         }
         return leave;
