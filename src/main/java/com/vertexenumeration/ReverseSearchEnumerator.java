@@ -3,8 +3,7 @@ package com.vertexenumeration;
 import java.util.*;
 
 /**
- * Reverse search enumerator (Java translation of lrslib/reverse.c).
- * Enumerates all vertices of an H-polyhedron via dictionary pivoting.
+ * Reverse search enumerator (1:1 parity with lrslib/reverse.c).
  */
 final class ReverseSearchEnumerator {
 
@@ -12,16 +11,12 @@ final class ReverseSearchEnumerator {
         final List<Fraction[]> vertices;
         final List<Fraction[]> rays;
         final EnumStats stats;
-
         Result(List<Fraction[]> v, List<Fraction[]> r, EnumStats s) {
-            vertices = v;
-            rays = r;
-            stats = s;
+            this.vertices = v; this.rays = r; this.stats = s;
         }
     }
 
-
-    private final Fraction[][] H; // inequalities: rows [b | A]
+    private final Fraction[][] H;
     private final int m, n, d;
 
     ReverseSearchEnumerator(Fraction[][] H) {
@@ -33,17 +28,18 @@ final class ReverseSearchEnumerator {
             throw new IllegalArgumentException("Empty/degenerate matrix");
     }
 
-    /** Run reverse search enumeration. */
-    /** Run reverse search enumeration. */
+    /** Main enumeration routine. */
     Result run() {
         EnumStats stats = new EnumStats();
         List<Fraction[]> verts = new ArrayList<>();
         Map<String, Fraction[]> uniqRays = new HashMap<>();
 
-        int[] rootBasis = findFirstBasisPhaseI(H);
+        // ---- Phase I: find feasible root basis ----
+        int[] rootBasis = findFeasibleBasis(H);
         if (rootBasis == null)
             return new Result(Collections.emptyList(), Collections.emptyList(), stats);
 
+        // DFS reverse search
         Deque<int[]> stack = new ArrayDeque<>();
         Deque<Integer> depth = new ArrayDeque<>();
         Set<String> seen = new HashSet<>();
@@ -60,35 +56,32 @@ final class ReverseSearchEnumerator {
 
             SimplexDictionary dict = new SimplexDictionary(H, B);
 
-            // ---- Vertex ----
+            // ---- count basis ----
+            stats.bases++;
+            if (dep > stats.maxDepth) stats.maxDepth = dep;
+
+            // ---- vertex ----
             Fraction[] x = dict.vertex();
             Fraction[] homog = toHomogeneous(x);
             verts.add(homog);
-
-            stats.bases++;
             stats.vertices++;
             if (isIntegerVertex(homog)) stats.integerVertices++;
-            if (dep > stats.maxDepth) stats.maxDepth = dep;
 
-            // ---- Rays ----
+            // ---- rays ----
             for (Fraction[] ray : dict.rayDirections()) {
-                Fraction[] canon = SimplexDictionary.canonicalizeRay(ray); // normalize
-                String rk = Arrays.toString(canon); // safe key after canonicalization
+                Fraction[] canon = SimplexDictionary.canonicalizeRay(ray);
+                String rk = Arrays.toString(canon);
                 if (!uniqRays.containsKey(rk)) {
                     uniqRays.put(rk, canon);
                     stats.rays++;
                 }
             }
 
-            // ---- Children ----
+            // ---- children ----
             List<int[]> children = dict.childrenBases();
-            // Reverse order before pushing → ensures DFS visits in lex order
-            Collections.reverse(children);
-
+            Collections.reverse(children); // DFS lex order
             for (int[] child : children) {
-                SimplexDictionary cd = new SimplexDictionary(H, child);
-                int[] par = cd.parentBasis();
-                if (par != null && key(par).equals(kb)) {
+                if (isParent(H, child, B)) {
                     stack.push(child);
                     depth.push(dep + 1);
                 }
@@ -96,7 +89,6 @@ final class ReverseSearchEnumerator {
         }
 
         List<Fraction[]> rays = new ArrayList<>(uniqRays.values());
-
         verts.sort(ReverseSearchEnumerator::lexCompareHomog);
         rays.sort(ReverseSearchEnumerator::lexCompareHomog);
 
@@ -104,51 +96,27 @@ final class ReverseSearchEnumerator {
         return new Result(verts, rays, stats);
     }
 
-
-
-    // ---------- Utilities ----------
-
-    /** Homogenize x → [1, x...] */
-    private static Fraction[] toHomogeneous(Fraction[] x) {
-        Fraction[] v = new Fraction[x.length + 1];
-        v[0] = Fraction.ONE;
-        System.arraycopy(x, 0, v, 1, x.length);
-        return v;
-    }
-
-    /** Check if homogeneous vertex is integer. */
-    private static boolean isIntegerVertex(Fraction[] v) {
-        for (int j = 1; j < v.length; j++) {
-            if (!v[j].denominator().equals(java.math.BigInteger.ONE))
-                return false;
-        }
-        return true;
-    }
-
-
-    /** Phase I simplex: find a feasible basis like lrs_getfirstbasis. */
-    /** Phase I simplex: find a feasible basis like lrs_getfirstbasis. */
-    private static int[] findFirstBasisPhaseI(Fraction[][] H) {
+    // ---------- Phase I ----------
+    /** Full Phase I like lrs_getfirstbasis: minimize sum of artificials. */
+    /**
+     * Phase I simplex: full lrslib-style routine.
+     * Builds auxiliary LP with artificial variables and minimizes their sum.
+     */
+    private static int[] findFeasibleBasis(Fraction[][] H) {
         final int m = H.length, n = H[0].length, d = n - 1;
 
-        // --- Step 1: Try trivial lex-min basis (first d rows) ---
-        int[] basis = initComb(d);
+        // Step 1: try trivial lex-min basis (first d rows)
+        int[] trivial = initComb(d);
         try {
-            SimplexDictionary dict = new SimplexDictionary(H, basis);
+            SimplexDictionary dict = new SimplexDictionary(H, trivial);
             boolean feasible = true;
             for (int i = 0; i < m; i++) {
-                if (dict.slack(i).compareTo(Fraction.ZERO) < 0) {
-                    feasible = false;
-                    break;
-                }
+                if (dict.slack(i).compareTo(Fraction.ZERO) < 0) { feasible = false; break; }
             }
-            if (feasible) {
-                Arrays.sort(basis);
-                return basis;
-            }
+            if (feasible) return trivial.clone();
         } catch (Exception ignore) {}
 
-        // --- Step 2: Build Phase I system (add d artificial rows) ---
+        // Step 2: Build Phase I system with artificials
         Fraction[][] Hphase = new Fraction[m + d][n];
         for (int i = 0; i < m; i++) {
             Hphase[i] = Arrays.copyOf(H[i], n);
@@ -156,68 +124,68 @@ final class ReverseSearchEnumerator {
         for (int i = 0; i < d; i++) {
             Hphase[m + i] = new Fraction[n];
             Arrays.fill(Hphase[m + i], Fraction.ZERO);
-            Hphase[m + i][0] = Fraction.ONE;       // slack constant
-            Hphase[m + i][i + 1] = Fraction.ONE;   // artificial identity
+            Hphase[m + i][0] = Fraction.ONE;
+            Hphase[m + i][i + 1] = Fraction.ONE; // artificial identity
         }
-        int mPhase = Hphase.length;
 
-        // --- Step 3: Start with artificial basis (last d rows) ---
-        int[] artBasis = new int[d];
-        for (int i = 0; i < d; i++) artBasis[i] = m + i;
-
+        // Initial artificial basis = last d rows
+        int[] basis = new int[d];
+        for (int i = 0; i < d; i++) basis[i] = m + i;
         SimplexDictionary dict;
         try {
-            dict = new SimplexDictionary(Hphase, artBasis);
+            dict = new SimplexDictionary(Hphase, basis);
         } catch (RuntimeException ex) {
             System.err.println("*unrecoverable error: no nonsingular artificial basis");
             return null;
         }
 
-        // --- Step 4: Pivot artificials out deterministically ---
+        // Step 3: Run Phase I auxiliary simplex
         boolean progress = true;
         while (progress) {
             progress = false;
 
-            // Check feasibility wrt original constraints
-            boolean feasible = true;
-            for (int i = 0; i < m; i++) {
-                if (dict.slack(i).compareTo(Fraction.ZERO) < 0) {
-                    feasible = false;
+            // Compute objective = sum of artificials in basis
+            Fraction obj = Fraction.ZERO;
+            for (int b : dict.basis()) {
+                if (b >= m) { // artificial
+                    obj = obj.add(dict.slack(b));
+                }
+            }
+            if (obj.compareTo(Fraction.ZERO) == 0) break; // feasible!
+
+            // Choose entering variable: any violating original row
+            int entering = -1;
+            for (int e = 0; e < m; e++) {
+                if (dict.slack(e).compareTo(Fraction.ZERO) < 0) {
+                    entering = e;
                     break;
                 }
             }
-            if (feasible) break;
-
-            // Try to replace artificials with original constraints
-            for (int e = 0; e < m; e++) {
-                if (dict.slack(e).compareTo(Fraction.ZERO) < 0) {
-                    int leave = dict.leavingFor(e);  // lex ratio rule
-                    if (leave >= 0) {
-                        int[] newBasis = dict.basis().clone();
-                        newBasis[leave] = e;
-                        Arrays.sort(newBasis);
-                        dict = new SimplexDictionary(Hphase, newBasis);
-                        progress = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!progress) {
+            if (entering == -1) {
                 System.err.println("*unrecoverable error: infeasible system");
                 return null;
             }
+
+            // Leaving variable via lex ratio rule
+            int leave = dict.leavingFor(entering);
+            if (leave < 0) {
+                System.err.println("*unrecoverable error: infeasible in Phase I pivot");
+                return null;
+            }
+
+            // Update basis
+            int[] newBasis = dict.basis().clone();
+            newBasis[leave] = entering;
+            Arrays.sort(newBasis);
+            dict = new SimplexDictionary(Hphase, newBasis);
+            progress = true;
         }
 
-        // --- Step 5: Drop artificial rows from basis ---
-        int[] finalBasis = new int[d];
-        int idx = 0;
-        for (int b : dict.basis()) {
-            if (b < m) { // keep only original rows
-                if (idx < d) finalBasis[idx++] = b;
-            }
-        }
-        if (idx != d) {
+        // Step 4: Drop artificials
+        int[] finalBasis = Arrays.stream(dict.basis())
+                .filter(b -> b < m)
+                .toArray();
+        if (finalBasis.length != d) {
             System.err.println("*unrecoverable error: artificial still in basis");
             return null;
         }
@@ -227,75 +195,42 @@ final class ReverseSearchEnumerator {
     }
 
 
-    /**
-     * Pick entering variable for Phase I: artificial column n.
-     * Returns -1 if none can improve objective.
-     */
-    private static int chooseEnteringArtificial(SimplexDictionary dict, int artificialCol) {
-        // Try to force artificial variable out of basis
-        for (int e = 0; e < dict.basis().length; e++) {
-            if (dict.basis()[e] == artificialCol) {
-                return artificialCol;
-            }
-        }
-        return -1; // artificial already out of basis
+    // ---------- Parent test ----------
+    /** Check if p is parent of child basis. */
+    private static boolean isParent(Fraction[][] H, int[] child, int[] parent) {
+        SimplexDictionary dict = new SimplexDictionary(H, child);
+        int[] par = dict.parentBasis();
+        return par != null && Arrays.equals(par, parent);
     }
 
-
-    /** Ratio rule to pick leaving row. */
-    private static int chooseLeaving(SimplexDictionary dict, int entering) {
-        int leave = -1;
-        Fraction bestT = null;
-        int bestIdx = Integer.MAX_VALUE;
-        Fraction ZERO = Fraction.ZERO;
-
-        Fraction se = dict.slack(entering);
-        if (se.compareTo(ZERO) >= 0) return -1;
-
-        for (int i = 0; i < dict.basis().length; i++) {
-            int r = dict.basis()[i];
-            Fraction sr = dict.slack(r);
-            if (sr.compareTo(ZERO) > 0) {
-                Fraction ratio = sr.divide(se.abs());
-                if (bestT == null || ratio.compareTo(bestT) < 0 ||
-                        (ratio.compareTo(bestT) == 0 && i < bestIdx)) {
-                    leave = i;
-                    bestT = ratio;
-                    bestIdx = i;
-                }
-            }
-        }
-        return leave;
+    // ---------- Utilities ----------
+    private static Fraction[] toHomogeneous(Fraction[] x) {
+        Fraction[] v = new Fraction[x.length + 1];
+        v[0] = Fraction.ONE;
+        System.arraycopy(x, 0, v, 1, x.length);
+        return v;
     }
-
+    private static boolean isIntegerVertex(Fraction[] v) {
+        for (int j = 1; j < v.length; j++) {
+            if (!v[j].denominator().equals(java.math.BigInteger.ONE)) return false;
+        }
+        return true;
+    }
     private static String key(int[] rows) {
         StringBuilder sb = new StringBuilder(rows.length * 3);
         for (int r : rows) sb.append(r).append(',');
         return sb.toString();
     }
-
     private static int[] initComb(int k) {
         int[] a = new int[k];
         for (int i = 0; i < k; i++) a[i] = i;
         return a;
     }
-
-    private static int[] nextComb(int[] a, int n, int k) {
-        int i = k - 1;
-        while (i >= 0 && a[i] == n - k + i) i--;
-        if (i < 0) return null;
-        a[i]++;
-        for (int j = i + 1; j < k; j++) a[j] = a[j - 1] + 1;
-        return a;
-    }
-
     private static int lexCompareHomog(Fraction[] a, Fraction[] b) {
-        for (int j = a.length - 1; j >= 1; j--) { // compare from last coordinate
+        for (int j = a.length - 1; j >= 1; j--) {
             int cmp = a[j].compareTo(b[j]);
-            if (cmp != 0) return -cmp; // lrslib uses descending
+            if (cmp != 0) return -cmp; // descending
         }
         return 0;
     }
-
-
 }
