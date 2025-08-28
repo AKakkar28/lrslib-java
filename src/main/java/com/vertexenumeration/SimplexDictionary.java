@@ -9,19 +9,60 @@ final class SimplexDictionary {
     private final Fraction[][] H; // m x n (n=1+d), columns [b | A]
     private final int m, n, d;
 
+    // --- Parity fields from lrs_dic_struct ---
+    private final int[] Row;          // row permutations
+    private final int[] Col;          // col permutations
+    private final int[] B;            // explicit basis bookkeeping
+    private final int[] C;            // explicit cobasis bookkeeping
+
+    private int depth;                // recursion depth
+    private int pivotRow, pivotCol;   // last pivot row/col
+    private int lastDecisionVar;      // last entering variable
+    private int objCol;               // objective col index
+    private Dictionary.LPStatus status; // current dictionary status
+
+
     private int[] basis;          // size d, sorted row indices
     private Fraction[][] Binv;    // d x d exact inverse of A_B
     private Fraction[] x;         // current vertex, length d
 
-    SimplexDictionary(Fraction[][] H, int[] basisRows) {
+    SimplexDictionary(Fraction[][] H, int[] basisVars) {
         this.H = H;
         this.m = H.length;
-        this.n = H[0].length;
+        this.n = H[0].length; // includes RHS column
         this.d = n - 1;
-        this.basis = basisRows.clone();
+
+        // --- Basis & cobasis ---
+        this.basis = basisVars.clone();
         Arrays.sort(this.basis);
+
+        // Nonbasic variables = all columns not in basis
+        List<Integer> cob = new ArrayList<>();
+        for (int j = 0; j < n; j++) {
+            if (Arrays.binarySearch(basis, j) < 0) {
+                cob.add(j);
+            }
+        }
+        this.C = cob.stream().mapToInt(Integer::intValue).toArray();
+
+        this.B = Arrays.copyOf(basis, basis.length);
+
+        // --- Permutations like lrslib ---
+        this.Row = new int[m];
+        this.Col = new int[n];
+        for (int i = 0; i < m; i++) Row[i] = i;
+        for (int j = 0; j < n; j++) Col[j] = j;
+
+        this.depth = 0;
+        this.pivotRow = -1;
+        this.pivotCol = -1;
+        this.lastDecisionVar = -1;
+        this.objCol = 0;
+        this.status = Dictionary.LPStatus.RUNNING;
+
         refactor();
     }
+
 
     int[] basis() { return basis.clone(); }
     Fraction[] vertex() { return x.clone(); }
@@ -53,33 +94,47 @@ final class SimplexDictionary {
         return s;
     }
 
-    /** Children in lexicographic order by lrs's rule:
-     *  For each entering e, choose leaving via lex ratio rule. */
-    // Children in lexicographic order using correct edge construction.
-// For each nonbasic row e and each basic position l:
-//   u := column l of B^{-1}   (i.e., B u = e_l)
-//   denom := a_e · u
-//   require denom < 0  (so a_l·dx = -1/denom > 0)
-//   step t* = s_e  (because a_e·dx = -1)
-//   check feasibility for all nonbasics j ≠ e: s_j + t* * (a_j·dx) >= 0
-// If feasible, neighbor basis = (basis with row at position l replaced by e)
+    public int depth() { return depth; }
+    public int pivotRow() { return pivotRow; }
+    public int pivotCol() { return pivotCol; }
+    public int lastDecisionVar() { return lastDecisionVar; }
+    public int objCol() { return objCol; }
+    public Dictionary.LPStatus status() { return status; }
+    public int[] rowPerm() { return Arrays.copyOf(Row, Row.length); }
+    public int[] colPerm() { return Arrays.copyOf(Col, Col.length); }
+    public int[] B() { return Arrays.copyOf(B, B.length); }
+    public int[] C() { return Arrays.copyOf(C, C.length); }
+
+
+
+    /** Children in lexicographic order by lrs's rule.
+     * For each entering e, choose leaving via lex ratio rule. */
+    /** Children in lexicographic order by lrs's rule. */
+    /** Children in lexicographic order by lrs's rule.
+     * For each entering row e, choose leaving via lex ratio rule. */
     List<int[]> childrenBases() {
         List<int[]> out = new ArrayList<>();
-        BitSet inB = inBasis();
         Fraction ZERO = H[0][0].subtract(H[0][0]);
 
-        for (int e = 0; e < m; e++) if (!inB.get(e)) {
-            Fraction se = slack(e);               // current slack of entering row
-            for (int l = 0; l < d; l++) {
-                Fraction[] u = columnOfBinv(l);   // B u = e_l
-                Fraction denom = dotRowA(e, u);   // a_e · u
-                if (denom.compareTo(ZERO) >= 0) continue;     // need denom < 0
-                boolean ok = true;
+        for (int e = 0; e < m; e++) {
+            // skip if already in basis
+            boolean inB = false;
+            for (int b : basis) if (b == e) { inB = true; break; }
+            if (inB) continue;
 
-                // a_j·dx = -(a_j·u)/denom ; step t* = se
+            Fraction se = slack(e);
+            for (int l = 0; l < d; l++) {
+                Fraction[] u = columnOfBinv(l);
+                Fraction denom = dotRowA(e, u);
+                if (denom.compareTo(ZERO) >= 0) continue;
+
+                boolean ok = true;
                 for (int j = 0; j < m && ok; j++) {
-                    if (inB.get(j)) continue;     // nonbasics only
-                    if (j == e) continue;         // entering becomes tight
+                    if (j == e) continue;
+                    boolean inBasis = false;
+                    for (int b : basis) if (b == j) { inBasis = true; break; }
+                    if (inBasis) continue;
+
                     Fraction aj_u = dotRowA(j, u);
                     Fraction ajdx = ZERO.subtract(aj_u).divide(denom);
                     if (slack(j).add(se.multiply(ajdx)).compareTo(ZERO) < 0) ok = false;
@@ -93,22 +148,48 @@ final class SimplexDictionary {
                 }
             }
         }
+
         out.sort(SimplexDictionary::lexCompare);
         return out;
     }
 
 
-    /** Lex parent: lexicographically smallest neighbor strictly < this basis. */
-    // Parent is the lexicographically smallest neighbor strictly less than this basis
+    /** Lex parent = lexicographically smallest neighbor strictly less than this basis. */
+    /** Lex parent = lexicographically smallest neighbor strictly less than this basis. */
     int[] parentBasis() {
         int[] best = null;
         for (int[] nb : childrenBases()) {
             if (lexCompare(nb, basis) < 0) {
-                if (best == null || lexCompare(nb, best) < 0) best = nb;
+                if (best == null || lexCompare(nb, best) < 0) {
+                    best = nb;
+                }
             }
         }
         return best;
     }
+
+
+    /** Slack for a given nonbasic variable (column index). */
+    private Fraction slackVar(int varCol) {
+        // RHS + column contribution
+        Fraction s = H[0][0].subtract(H[0][0]); // ZERO
+        for (int i = 0; i < d; i++) {
+            s = s.add(H[basis[i]][varCol].multiply(x[i]));
+        }
+        return s;
+    }
+
+    /** Dot product of a column (variable index) with a direction vector u. */
+    private Fraction colDot(int varCol, Fraction[] u) {
+        Fraction s = H[0][0].subtract(H[0][0]); // ZERO
+        for (int i = 0; i < d; i++) {
+            s = s.add(H[basis[i]][varCol].multiply(u[i]));
+        }
+        return s;
+    }
+
+
+
 
 
     /** Compute leaving row index in basis for entering e using a lexicographic ratio rule. */
