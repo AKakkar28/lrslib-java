@@ -436,7 +436,7 @@ final class SimplexDictionary {
 
     /** Normalize ray: divide out gcd, flip sign if needed so first nonzero > 0. */
     /** Normalize ray: divide out gcd, flip sign so first nonzero > 0. */
-    private static Fraction[] canonicalizeRay(Fraction[] r) {
+    public static Fraction[] canonicalizeRay(Fraction[] r) {
         int n = r.length;
         Fraction ZERO = r[0].subtract(r[0]);
 

@@ -34,6 +34,7 @@ final class ReverseSearchEnumerator {
     }
 
     /** Run reverse search enumeration. */
+    /** Run reverse search enumeration. */
     Result run() {
         EnumStats stats = new EnumStats();
         List<Fraction[]> verts = new ArrayList<>();
@@ -71,15 +72,20 @@ final class ReverseSearchEnumerator {
 
             // ---- Rays ----
             for (Fraction[] ray : dict.rayDirections()) {
-                String rk = Arrays.toString(ray);
+                Fraction[] canon = SimplexDictionary.canonicalizeRay(ray); // normalize
+                String rk = Arrays.toString(canon); // safe key after canonicalization
                 if (!uniqRays.containsKey(rk)) {
-                    uniqRays.put(rk, ray);
+                    uniqRays.put(rk, canon);
                     stats.rays++;
                 }
             }
 
             // ---- Children ----
-            for (int[] child : dict.childrenBases()) {
+            List<int[]> children = dict.childrenBases();
+            // Reverse order before pushing → ensures DFS visits in lex order
+            Collections.reverse(children);
+
+            for (int[] child : children) {
                 SimplexDictionary cd = new SimplexDictionary(H, child);
                 int[] par = cd.parentBasis();
                 if (par != null && key(par).equals(kb)) {
