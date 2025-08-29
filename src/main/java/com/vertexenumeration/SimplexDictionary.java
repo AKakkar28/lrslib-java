@@ -379,69 +379,91 @@ final class SimplexDictionary {
 
 
 
+    /**
+     * Invert matrix B using full pivoting (parity with lrs_inverse in lrslib).
+     * Returns Binv if nonsingular, otherwise throws ArithmeticException.
+     */
     private static Fraction[][] invert(Fraction[][] B) {
         int n = B.length;
         Fraction ZERO = B[0][0].subtract(B[0][0]);
 
-        // augmented [B | I]
+        // augmented matrix [B | I]
         Fraction[][] M = new Fraction[n][2 * n];
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) M[i][j] = B[i][j];
             for (int j = 0; j < n; j++) M[i][n + j] = (i == j ? Fraction.ONE : ZERO);
         }
 
+        int[] rowPerm = new int[n];
         int[] colPerm = new int[n];
-        for (int j = 0; j < n; j++) colPerm[j] = j;
+        for (int i = 0; i < n; i++) {
+            rowPerm[i] = i;
+            colPerm[i] = i;
+        }
 
-        // full pivoting
+        // Gaussian elimination with full pivoting
         for (int k = 0; k < n; k++) {
+            // Find pivot: first nonzero among submatrix
             int pivRow = -1, pivCol = -1;
             outer:
             for (int i = k; i < n; i++) {
                 for (int j = k; j < n; j++) {
                     if (!M[i][j].equals(ZERO)) {
-                        pivRow = i; pivCol = j; break outer;
+                        pivRow = i;
+                        pivCol = j;
+                        break outer;
                     }
                 }
             }
-            if (pivRow == -1) throw new ArithmeticException("Singular matrix in invert()");
+            if (pivRow == -1) {
+                throw new ArithmeticException("Singular matrix in invert()");
+            }
 
-            // row swap
+            // Swap rows
             if (pivRow != k) {
                 Fraction[] tmp = M[pivRow]; M[pivRow] = M[k]; M[k] = tmp;
+                int t = rowPerm[pivRow]; rowPerm[pivRow] = rowPerm[k]; rowPerm[k] = t;
             }
-            // col swap (and track)
+
+            // Swap cols
             if (pivCol != k) {
                 for (int i = 0; i < n; i++) {
                     Fraction tmp = M[i][pivCol]; M[i][pivCol] = M[i][k]; M[i][k] = tmp;
                 }
-                int tmpIdx = colPerm[pivCol]; colPerm[pivCol] = colPerm[k]; colPerm[k] = tmpIdx;
+                int t = colPerm[pivCol]; colPerm[pivCol] = colPerm[k]; colPerm[k] = t;
             }
 
-            // normalize pivot row
+            // Normalize pivot row
             Fraction diag = M[k][k];
-            for (int j = k; j < 2 * n; j++) M[k][j] = M[k][j].divide(diag);
+            if (diag.equals(ZERO)) {
+                throw new ArithmeticException("Singular matrix in invert() (zero diag after pivot)");
+            }
+            for (int j = 0; j < 2 * n; j++) {
+                M[k][j] = M[k][j].divide(diag);
+            }
 
-            // eliminate
-            for (int i = 0; i < n; i++) if (i != k) {
-                Fraction f = M[i][k];
-                if (!f.equals(ZERO)) {
-                    for (int j = k; j < 2 * n; j++) {
-                        M[i][j] = M[i][j].subtract(f.multiply(M[k][j]));
+            // Eliminate other rows
+            for (int i = 0; i < n; i++) {
+                if (i == k) continue;
+                Fraction factor = M[i][k];
+                if (!factor.equals(ZERO)) {
+                    for (int j = 0; j < 2 * n; j++) {
+                        M[i][j] = M[i][j].subtract(factor.multiply(M[k][j]));
                     }
                 }
             }
         }
 
-        // extract inverse with column permutation
+        // Extract inverse, undo column permutation
         Fraction[][] inv = new Fraction[n][n];
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
-                inv[colPerm[j]][i] = M[i][n + j]; // note permuted
+                inv[colPerm[j]][i] = M[i][n + j];
             }
         }
         return inv;
     }
+
 
 
 

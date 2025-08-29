@@ -111,6 +111,10 @@ final class ReverseSearchEnumerator {
      * Phase I feasibility routine (parity with lrs_getfirstbasis in lrslib).
      * Builds auxiliary system with artificials and pivots until feasible basis found.
      */
+    /**
+     * Phase I feasibility routine (parity with lrs_getfirstbasis in lrslib).
+     * Builds auxiliary system with artificials and pivots until feasible basis found.
+     */
     private int[] findFeasibleBasis(Fraction[][] H) {
         int m = H.length;
         int n = H[0].length;
@@ -128,83 +132,93 @@ final class ReverseSearchEnumerator {
             }
             if (feasible) return trivial;
         } catch (RuntimeException ignore) {
-            // singular basis, fallback to Phase I
+            // singular basis → fallback to Phase I
         }
 
         // Step 2: Build Phase I system with artificials
-        // Add dOriginal artificial variables => n + dOriginal columns
         Fraction[][] Hphase = new Fraction[m + dOriginal][n + dOriginal];
 
-        // Copy original rows, pad with zeros for artificials
+        // Copy original rows
         for (int i = 0; i < m; i++) {
             Hphase[i] = new Fraction[n + dOriginal];
-            for (int j = 0; j < n; j++) {
-                Hphase[i][j] = H[i][j];
-            }
-            for (int j = n; j < n + dOriginal; j++) {
-                Hphase[i][j] = Fraction.ZERO;
-            }
+            for (int j = 0; j < n; j++) Hphase[i][j] = H[i][j];
+            for (int j = n; j < n + dOriginal; j++) Hphase[i][j] = Fraction.ZERO;
         }
 
         // Add artificial identity rows
         for (int i = 0; i < dOriginal; i++) {
             Hphase[m + i] = new Fraction[n + dOriginal];
             Arrays.fill(Hphase[m + i], Fraction.ZERO);
-            Hphase[m + i][0] = Fraction.ONE;        // RHS = 1
+            Hphase[m + i][0] = Fraction.ONE;        // RHS
             Hphase[m + i][n + i] = Fraction.ONE;    // artificial variable
         }
 
-        // Initial basis = artificials (last dOriginal rows)
+        // Initial artificial basis = last dOriginal rows
         int[] basis = new int[dOriginal];
         for (int i = 0; i < dOriginal; i++) basis[i] = m + i;
 
-        SimplexDictionary dict = new SimplexDictionary(Hphase, basis, dOriginal);
+        SimplexDictionary dict;
+        try {
+            dict = new SimplexDictionary(Hphase, basis, dOriginal);
+        } catch (RuntimeException ex) {
+            System.err.println("*unrecoverable error: no nonsingular artificial basis");
+            return null;
+        }
 
         // Step 3: Phase I simplex loop
-        while (true) {
-            // Reset lexFlags each pivot iteration
-            Arrays.fill(dict.lexFlags(), false);
+        boolean progress = true;
+        while (progress) {
+            progress = false;
 
-            // Check feasibility: all original slacks ≥ 0?
-            boolean feasible = true;
-            for (int i = 0; i < m; i++) {
-                if (dict.slack(i).compareTo(Fraction.ZERO) < 0) {
-                    feasible = false;
-                    break;
+            try {
+                // Check feasibility: all original slacks ≥ 0?
+                boolean feasible = true;
+                for (int i = 0; i < m; i++) {
+                    if (dict.slack(i).compareTo(Fraction.ZERO) < 0) {
+                        feasible = false;
+                        break;
+                    }
                 }
-            }
-            if (feasible) break;
+                if (feasible) break;
 
-            // Pick entering row e (any violating slack)
-            int entering = -1;
-            for (int e = 0; e < m; e++) {
-                if (dict.slack(e).compareTo(Fraction.ZERO) < 0) {
-                    entering = e;
-                    break;
+                // Pick entering row e (any violating slack)
+                int entering = -1;
+                for (int e = 0; e < m; e++) {
+                    if (dict.slack(e).compareTo(Fraction.ZERO) < 0) {
+                        entering = e;
+                        break;
+                    }
                 }
-            }
-            if (entering < 0) {
-                System.err.println("*unrecoverable error: infeasible system (no entering row)");
-                return null;
-            }
+                if (entering < 0) {
+                    System.err.println("*unrecoverable error: infeasible system");
+                    return null;
+                }
 
-            // Choose leaving row via lex ratio test
-            int leave = dict.leavingFor(entering);
-            if (leave < 0) {
-                System.err.println("*unrecoverable error: infeasible in Phase I pivot (no leaving row)");
-                return null;
-            }
+                // Leaving row via lex ratio test
+                int leave = dict.leavingFor(entering);
+                if (leave < 0) {
+                    System.err.println("*unrecoverable error: infeasible in Phase I pivot");
+                    return null;
+                }
 
-            // Update basis
-            int[] nb = dict.basis().clone();
-            nb[leave] = entering;
-            Arrays.sort(nb);
-            dict = new SimplexDictionary(Hphase, nb, dOriginal);
+                // Update basis
+                int[] nb = dict.basis().clone();
+                nb[leave] = entering;
+                Arrays.sort(nb);
+
+                dict = new SimplexDictionary(Hphase, nb, dOriginal);
+                progress = true;
+
+            } catch (ArithmeticException ex) {
+                // Singular pivot recovery (parity with lrslib)
+                System.err.println("*warning: singular basis encountered, retrying Phase I...");
+                progress = true; // force retry loop
+            }
         }
 
         // Step 4: Drop artificials
         int[] finalBasis = Arrays.stream(dict.basis())
-                .filter(b -> b < m) // keep only original rows
+                .filter(b -> b < m)
                 .toArray();
         if (finalBasis.length != dOriginal) {
             System.err.println("*unrecoverable error: artificial still in basis");
@@ -214,6 +228,7 @@ final class ReverseSearchEnumerator {
         Arrays.sort(finalBasis);
         return finalBasis;
     }
+
 
 
 
