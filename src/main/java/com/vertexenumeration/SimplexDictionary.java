@@ -222,6 +222,10 @@ final class SimplexDictionary {
      * Lexicographic ratio test (lrslib’s lrs_lexminratio).
      * Returns index of leaving row in the basis, or -1 if none.
      */
+    /**
+     * Lexicographic ratio test (lrslib’s lrs_lexminratio with lexFlag support).
+     * Returns index of leaving row in the basis, or -1 if none.
+     */
     public int leavingFor(int e) {
         Fraction[] a_e = new Fraction[d];
         for (int j = 0; j < d; j++) a_e[j] = H[e][j + 1];
@@ -247,13 +251,32 @@ final class SimplexDictionary {
             ratioVec[0] = t;
             System.arraycopy(Binv[i], 0, ratioVec, 1, d);
 
-            if (bestLex == null || lexFrac(ratioVec, bestLex) < 0) {
+            if (bestLex == null) {
                 bestLex = ratioVec;
                 leave = i;
+            } else {
+                int cmp = lexFrac(ratioVec, bestLex);
+                if (cmp < 0) {
+                    bestLex = ratioVec;
+                    leave = i;
+                } else if (cmp == 0) {
+                    // Tie: break deterministically using lexFlag[]
+                    if (!lexFlag[basis[i]] && lexFlag[basis[leave]]) {
+                        bestLex = ratioVec;
+                        leave = i;
+                    }
+                }
             }
         }
+
+        // Mark chosen row in lexFlag (like lrslib does)
+        if (leave >= 0) {
+            lexFlag[basis[leave]] = true;
+        }
+
         return leave;
     }
+
     private static boolean betterRatio(Fraction t, int idx, Fraction bestT, int bestIdx) {
         if (bestT == null) return true;
         int c = t.compareTo(bestT);

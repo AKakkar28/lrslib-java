@@ -40,21 +40,20 @@ final class ReverseSearchEnumerator {
             return new Result(Collections.emptyList(), Collections.emptyList(), stats);
 
         // DFS reverse search
-        Deque<int[]> stack = new ArrayDeque<>();
+        Deque<SimplexDictionary> stack = new ArrayDeque<>();
         Deque<Integer> depth = new ArrayDeque<>();
         Set<String> seen = new HashSet<>();
 
-        stack.push(rootBasis);
+        SimplexDictionary rootDict = new SimplexDictionary(H, rootBasis);
+        stack.push(rootDict);
         depth.push(0);
 
         while (!stack.isEmpty()) {
-            int[] B = stack.pop();
+            SimplexDictionary dict = stack.pop();
             int dep = depth.pop();
 
-            String kb = key(B);
+            String kb = key(dict.basis());
             if (!seen.add(kb)) continue;
-
-            SimplexDictionary dict = new SimplexDictionary(H, B);
 
             // ---- count basis ----
             stats.bases++;
@@ -66,6 +65,13 @@ final class ReverseSearchEnumerator {
             verts.add(homog);
             stats.vertices++;
             if (isIntegerVertex(homog)) stats.integerVertices++;
+
+            // ---- objective (parity with lrslib) ----
+            Fraction objVal = Fraction.ZERO;
+            for (int j = 0; j < d; j++) {
+                objVal = objVal.add(x[j]); // simplistic: sum of coords
+            }
+            dict.setObjective(objVal, Fraction.ONE, dict.objCol());
 
             // ---- rays ----
             for (Fraction[] ray : dict.rayDirections()) {
@@ -80,9 +86,12 @@ final class ReverseSearchEnumerator {
             // ---- children ----
             List<int[]> children = dict.childrenBases();
             Collections.reverse(children); // DFS lex order
-            for (int[] child : children) {
-                if (isParent(H, child, B)) {
-                    stack.push(child);
+            for (int[] childBasis : children) {
+                if (isParent(H, childBasis, dict.basis())) {
+                    SimplexDictionary childDict = new SimplexDictionary(H, childBasis);
+                    childDict.setPrev(dict); // parity: child->prev = parent
+                    dict.setNext(childDict);
+                    stack.push(childDict);
                     depth.push(dep + 1);
                 }
             }
