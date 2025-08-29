@@ -6,37 +6,48 @@ import java.util.*;
  *  Basis = d tight rows. Computes vertex, slacks, and lexicographic pivots.
  */
 final class SimplexDictionary {
-    private final Fraction[][] H; // m x n (n=1+d), columns [b | A]
+    // Tableau: H is m x n, with n = d+1 (RHS | A)
+    private final Fraction[][] H;
     private final int m, n, d;
 
     // --- Parity fields from lrs_dic_struct ---
-    private final int[] Row;          // row permutations
-    private final int[] Col;          // col permutations
-    private final int[] B;            // explicit basis bookkeeping
-    private final int[] C;            // explicit cobasis bookkeeping
+    private final int[] Row;       // row permutations
+    private final int[] Col;       // col permutations
+    private final int[] B;         // explicit basis bookkeeping
+    private final int[] C;         // explicit cobasis bookkeeping
+    private final boolean[] lexFlag; // parity: used for lexmin pivot choice
 
-    private int depth;                // recursion depth
-    private int pivotRow, pivotCol;   // last pivot row/col
-    private int lastDecisionVar;      // last entering variable
-    private int objCol;               // objective col index
-    private Dictionary.LPStatus status; // current dictionary status
+    private int depth;             // recursion depth
+    private int pivotRow, pivotCol;// last pivot row/col
+    private int lastDecisionVar;   // last entering variable
 
+    // Objective function (lrslib stores numerator/denominator explicitly)
+    private Fraction objNum;
+    private Fraction objDen;
+    private int objCol;            // objective column index
 
-    private int[] basis;          // size d, sorted row indices
-    private Fraction[][] Binv;    // d x d exact inverse of A_B
-    private Fraction[] x;         // current vertex, length d
+    private Dictionary.LPStatus status; // dictionary feasibility status
+
+    // Reverse search tree links (lrslib uses prev/next pointers)
+    private SimplexDictionary prev;
+    private SimplexDictionary next;
+
+    // Current basis & factorization
+    private int[] basis;        // size d, sorted row indices
+    private Fraction[][] Binv;  // d x d exact inverse of A_B
+    private Fraction[] x;       // current vertex, length d
+
 
     SimplexDictionary(Fraction[][] H, int[] basisVars) {
         this.H = H;
         this.m = H.length;
-        this.n = H[0].length; // includes RHS column
+        this.n = H[0].length;
         this.d = n - 1;
 
-        // --- Basis & cobasis ---
+        // Basis/cobasis setup
         this.basis = basisVars.clone();
         Arrays.sort(this.basis);
 
-        // Nonbasic variables = all columns not in basis
         List<Integer> cob = new ArrayList<>();
         for (int j = 0; j < n; j++) {
             if (Arrays.binarySearch(basis, j) < 0) {
@@ -44,21 +55,30 @@ final class SimplexDictionary {
             }
         }
         this.C = cob.stream().mapToInt(Integer::intValue).toArray();
-
         this.B = Arrays.copyOf(basis, basis.length);
 
-        // --- Permutations like lrslib ---
+        // Permutations
         this.Row = new int[m];
         this.Col = new int[n];
         for (int i = 0; i < m; i++) Row[i] = i;
         for (int j = 0; j < n; j++) Col[j] = j;
 
+        // Lex flags
+        this.lexFlag = new boolean[n];
+
+        // Init values
         this.depth = 0;
         this.pivotRow = -1;
         this.pivotCol = -1;
         this.lastDecisionVar = -1;
         this.objCol = 0;
+        this.objNum = Fraction.ZERO;
+        this.objDen = Fraction.ONE;
         this.status = Dictionary.LPStatus.RUNNING;
+
+        // Reverse search links null initially
+        this.prev = null;
+        this.next = null;
 
         refactor();
     }
@@ -99,17 +119,24 @@ final class SimplexDictionary {
     public int pivotCol() { return pivotCol; }
     public int lastDecisionVar() { return lastDecisionVar; }
     public int objCol() { return objCol; }
+    public Fraction objNum() { return objNum; }
+    public Fraction objDen() { return objDen; }
     public Dictionary.LPStatus status() { return status; }
     public int[] rowPerm() { return Arrays.copyOf(Row, Row.length); }
     public int[] colPerm() { return Arrays.copyOf(Col, Col.length); }
-    public int[] B() { return Arrays.copyOf(B, B.length); }
-    public int[] C() { return Arrays.copyOf(C, C.length); }
+    public boolean[] lexFlags() { return Arrays.copyOf(lexFlag, lexFlag.length); }
+    public SimplexDictionary getPrev() { return prev; }
+    public SimplexDictionary getNext() { return next; }
+    public void setPrev(SimplexDictionary p) { this.prev = p; }
+    public void setNext(SimplexDictionary n) { this.next = n; }
 
+    // --- Methods for objective parity ---
+    public void setObjective(Fraction num, Fraction den, int colIndex) {
+        this.objNum = num;
+        this.objDen = den;
+        this.objCol = colIndex;
+    }
 
-
-    /** Children in lexicographic order by lrs's rule.
-     * For each entering e, choose leaving via lex ratio rule. */
-    /** Children in lexicographic order by lrs's rule. */
     /** Children in lexicographic order by lrs's rule.
      * For each entering row e, choose leaving via lex ratio rule. */
     List<int[]> childrenBases() {
