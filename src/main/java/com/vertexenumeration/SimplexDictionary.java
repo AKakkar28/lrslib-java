@@ -8,7 +8,8 @@ import java.util.*;
 final class SimplexDictionary {
     // Tableau: H is m x n, with n = d+1 (RHS | A)
     private final Fraction[][] H;
-    private final int m, n, d;
+    private final int m, n;
+    private final int d;
 
     // --- Parity fields from lrs_dic_struct ---
     private final int[] Row;       // row permutations
@@ -38,11 +39,11 @@ final class SimplexDictionary {
     private Fraction[] x;       // current vertex, length d
 
 
-    SimplexDictionary(Fraction[][] H, int[] basisVars) {
+    SimplexDictionary(Fraction[][] H, int[] basisVars, int dOriginal) {
         this.H = H;
         this.m = H.length;
         this.n = H[0].length;
-        this.d = n - 1;
+        this.d = dOriginal;   // FIX: use original dimension, not n-1
 
         // Basis/cobasis setup
         this.basis = basisVars.clone();
@@ -76,7 +77,7 @@ final class SimplexDictionary {
         this.objDen = Fraction.ONE;
         this.status = Dictionary.LPStatus.RUNNING;
 
-        // Reverse search links null initially
+        // Reverse search links
         this.prev = null;
         this.next = null;
 

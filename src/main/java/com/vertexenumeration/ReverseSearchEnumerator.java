@@ -17,14 +17,15 @@ final class ReverseSearchEnumerator {
     }
 
     private final Fraction[][] H;
-    private final int m, n, d;
+    private final int m, n, dOriginal;
+
 
     ReverseSearchEnumerator(Fraction[][] H) {
         this.H = H;
         this.m = H.length;
         this.n = (m == 0 ? 0 : H[0].length);
-        this.d = Math.max(0, n - 1);
-        if (m == 0 || n == 0 || d == 0)
+        this.dOriginal = Math.max(0, n - 1);
+        if (m == 0 || n == 0 || dOriginal == 0)
             throw new IllegalArgumentException("Empty/degenerate matrix");
     }
 
@@ -44,7 +45,7 @@ final class ReverseSearchEnumerator {
         Deque<Integer> depth = new ArrayDeque<>();
         Set<String> seen = new HashSet<>();
 
-        SimplexDictionary rootDict = new SimplexDictionary(H, rootBasis);
+        SimplexDictionary rootDict = new SimplexDictionary(H, rootBasis, dOriginal);
         stack.push(rootDict);
         depth.push(0);
 
@@ -68,7 +69,7 @@ final class ReverseSearchEnumerator {
 
             // ---- objective (parity with lrslib) ----
             Fraction objVal = Fraction.ZERO;
-            for (int j = 0; j < d; j++) {
+            for (int j = 0; j < dOriginal; j++) {
                 objVal = objVal.add(x[j]); // simplistic: sum of coords
             }
             dict.setObjective(objVal, Fraction.ONE, dict.objCol());
@@ -88,7 +89,7 @@ final class ReverseSearchEnumerator {
             Collections.reverse(children); // DFS lex order
             for (int[] childBasis : children) {
                 if (isParent(H, childBasis, dict.basis())) {
-                    SimplexDictionary childDict = new SimplexDictionary(H, childBasis);
+                    SimplexDictionary childDict = new SimplexDictionary(H, childBasis, dOriginal);
                     childDict.setPrev(dict); // parity: child->prev = parent
                     dict.setNext(childDict);
                     stack.push(childDict);
@@ -106,63 +107,75 @@ final class ReverseSearchEnumerator {
     }
 
     // ---------- Phase I ----------
-    /** Full Phase I like lrs_getfirstbasis: minimize sum of artificials. */
     /**
-     * Phase I simplex: full lrslib-style routine.
-     * Builds auxiliary LP with artificial variables and minimizes their sum.
+     * Phase I feasibility routine (parity with lrs_getfirstbasis in lrslib).
+     * Builds auxiliary system with artificials and pivots until feasible basis found.
      */
-    private static int[] findFeasibleBasis(Fraction[][] H) {
-        final int m = H.length, n = H[0].length, d = n - 1;
+    private int[] findFeasibleBasis(Fraction[][] H) {
+        int m = H.length;
+        int n = H[0].length;
 
-        // Step 1: try trivial lex-min basis (first d rows)
-        int[] trivial = initComb(d);
+        // Step 1: Try trivial basis = first dOriginal rows
+        int[] trivial = initComb(dOriginal);
         try {
-            SimplexDictionary dict = new SimplexDictionary(H, trivial);
+            SimplexDictionary test = new SimplexDictionary(H, trivial, dOriginal);
             boolean feasible = true;
             for (int i = 0; i < m; i++) {
-                if (dict.slack(i).compareTo(Fraction.ZERO) < 0) { feasible = false; break; }
-            }
-            if (feasible) return trivial.clone();
-        } catch (Exception ignore) {}
-
-        // Step 2: Build Phase I system with artificials
-        Fraction[][] Hphase = new Fraction[m + d][n];
-        for (int i = 0; i < m; i++) {
-            Hphase[i] = Arrays.copyOf(H[i], n);
-        }
-        for (int i = 0; i < d; i++) {
-            Hphase[m + i] = new Fraction[n];
-            Arrays.fill(Hphase[m + i], Fraction.ZERO);
-            Hphase[m + i][0] = Fraction.ONE;
-            Hphase[m + i][i + 1] = Fraction.ONE; // artificial identity
-        }
-
-        // Initial artificial basis = last d rows
-        int[] basis = new int[d];
-        for (int i = 0; i < d; i++) basis[i] = m + i;
-        SimplexDictionary dict;
-        try {
-            dict = new SimplexDictionary(Hphase, basis);
-        } catch (RuntimeException ex) {
-            System.err.println("*unrecoverable error: no nonsingular artificial basis");
-            return null;
-        }
-
-        // Step 3: Run Phase I auxiliary simplex
-        boolean progress = true;
-        while (progress) {
-            progress = false;
-
-            // Compute objective = sum of artificials in basis
-            Fraction obj = Fraction.ZERO;
-            for (int b : dict.basis()) {
-                if (b >= m) { // artificial
-                    obj = obj.add(dict.slack(b));
+                if (test.slack(i).compareTo(Fraction.ZERO) < 0) {
+                    feasible = false;
+                    break;
                 }
             }
-            if (obj.compareTo(Fraction.ZERO) == 0) break; // feasible!
+            if (feasible) return trivial;
+        } catch (RuntimeException ignore) {
+            // singular basis, fallback to Phase I
+        }
 
-            // Choose entering variable: any violating original row
+        // Step 2: Build Phase I system with artificials
+        // Add dOriginal artificial variables => n + dOriginal columns
+        Fraction[][] Hphase = new Fraction[m + dOriginal][n + dOriginal];
+
+        // Copy original rows, pad with zeros for artificials
+        for (int i = 0; i < m; i++) {
+            Hphase[i] = new Fraction[n + dOriginal];
+            for (int j = 0; j < n; j++) {
+                Hphase[i][j] = H[i][j];
+            }
+            for (int j = n; j < n + dOriginal; j++) {
+                Hphase[i][j] = Fraction.ZERO;
+            }
+        }
+
+        // Add artificial identity rows
+        for (int i = 0; i < dOriginal; i++) {
+            Hphase[m + i] = new Fraction[n + dOriginal];
+            Arrays.fill(Hphase[m + i], Fraction.ZERO);
+            Hphase[m + i][0] = Fraction.ONE;        // RHS = 1
+            Hphase[m + i][n + i] = Fraction.ONE;    // artificial variable
+        }
+
+        // Initial basis = artificials (last dOriginal rows)
+        int[] basis = new int[dOriginal];
+        for (int i = 0; i < dOriginal; i++) basis[i] = m + i;
+
+        SimplexDictionary dict = new SimplexDictionary(Hphase, basis, dOriginal);
+
+        // Step 3: Phase I simplex loop
+        while (true) {
+            // Reset lexFlags each pivot iteration
+            Arrays.fill(dict.lexFlags(), false);
+
+            // Check feasibility: all original slacks ≥ 0?
+            boolean feasible = true;
+            for (int i = 0; i < m; i++) {
+                if (dict.slack(i).compareTo(Fraction.ZERO) < 0) {
+                    feasible = false;
+                    break;
+                }
+            }
+            if (feasible) break;
+
+            // Pick entering row e (any violating slack)
             int entering = -1;
             for (int e = 0; e < m; e++) {
                 if (dict.slack(e).compareTo(Fraction.ZERO) < 0) {
@@ -170,31 +183,30 @@ final class ReverseSearchEnumerator {
                     break;
                 }
             }
-            if (entering == -1) {
-                System.err.println("*unrecoverable error: infeasible system");
+            if (entering < 0) {
+                System.err.println("*unrecoverable error: infeasible system (no entering row)");
                 return null;
             }
 
-            // Leaving variable via lex ratio rule
+            // Choose leaving row via lex ratio test
             int leave = dict.leavingFor(entering);
             if (leave < 0) {
-                System.err.println("*unrecoverable error: infeasible in Phase I pivot");
+                System.err.println("*unrecoverable error: infeasible in Phase I pivot (no leaving row)");
                 return null;
             }
 
             // Update basis
-            int[] newBasis = dict.basis().clone();
-            newBasis[leave] = entering;
-            Arrays.sort(newBasis);
-            dict = new SimplexDictionary(Hphase, newBasis);
-            progress = true;
+            int[] nb = dict.basis().clone();
+            nb[leave] = entering;
+            Arrays.sort(nb);
+            dict = new SimplexDictionary(Hphase, nb, dOriginal);
         }
 
         // Step 4: Drop artificials
         int[] finalBasis = Arrays.stream(dict.basis())
-                .filter(b -> b < m)
+                .filter(b -> b < m) // keep only original rows
                 .toArray();
-        if (finalBasis.length != d) {
+        if (finalBasis.length != dOriginal) {
             System.err.println("*unrecoverable error: artificial still in basis");
             return null;
         }
@@ -204,10 +216,13 @@ final class ReverseSearchEnumerator {
     }
 
 
+
+
+
     // ---------- Parent test ----------
     /** Check if p is parent of child basis. */
-    private static boolean isParent(Fraction[][] H, int[] child, int[] parent) {
-        SimplexDictionary dict = new SimplexDictionary(H, child);
+    private boolean isParent(Fraction[][] H, int[] child, int[] parent) {
+        SimplexDictionary dict = new SimplexDictionary(H, child, dOriginal);
         int[] par = dict.parentBasis();
         return par != null && Arrays.equals(par, parent);
     }
