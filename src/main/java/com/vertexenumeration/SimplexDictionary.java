@@ -89,24 +89,32 @@ final class SimplexDictionary {
     Fraction[] vertex() { return x.clone(); }
 
     /** Recompute B^{-1} and x from basis. */
+    /** Recompute B^{-1} and x from basis (parity with lrs_refactor in lrslib). */
     private void refactor() {
-        // Build B and b_B
-        Fraction[][] B = new Fraction[d][d];
+        // Build basis matrix B and RHS b_B
+        Fraction[][] Bmat = new Fraction[d][d];
         Fraction[] bB = new Fraction[d];
         for (int i = 0; i < d; i++) {
             int r = basis[i];
-            bB[i] = H[r][0];
-            for (int j = 0; j < d; j++) B[i][j] = H[r][j+1];
+            bB[i] = H[r][0]; // RHS
+            for (int j = 0; j < d; j++) {
+                Bmat[i][j] = H[r][j + 1];
+            }
         }
-        // Binv by solving B * Binv = I
-        this.Binv = invert(B);
-        // x solves B x = -b_B
-        this.x = solve(B, negate(bB));
+
+        // Compute inverse of B (robust full pivoting)
+        this.Binv = invert(Bmat);
+
+        // Solve B * x = -b_B (robust full pivoting)
+        Fraction[] negb = negate(bB);
+        this.x = solve(Bmat, negb);
+
+        // Parity check: if x is null, then basis was singular
         if (this.x == null) {
             throw new RuntimeException("Refactor failed: singular basis " + Arrays.toString(basis));
         }
-
     }
+
 
     /** Slack of row i at current x: b_i + a_i·x */
     Fraction slack(int i) {
@@ -298,16 +306,23 @@ final class SimplexDictionary {
         return s;
     }
 
-    private Fraction[] solveWithBinv(Fraction[] rhs){
-        // dx = Binv * rhs
-        Fraction[] out = new Fraction[d];
+    /**
+     * Solve B * x = rhs using current basis matrix and full pivoting.
+     * Parity with lrslib (instead of just multiplying Binv).
+     */
+    private Fraction[] solveWithBinv(Fraction[] rhs) {
+        // Build basis matrix B explicitly from H and basis[]
+        Fraction[][] Bmat = new Fraction[d][d];
         for (int i = 0; i < d; i++) {
-            Fraction s = zero(rhs[0]);
-            for (int j = 0; j < d; j++) s = s.add(Binv[i][j].multiply(rhs[j]));
-            out[i] = s;
+            int r = basis[i];
+            for (int j = 0; j < d; j++) {
+                Bmat[i][j] = H[r][j + 1];
+            }
         }
-        return out;
+        // Solve Bmat * x = rhs using robust solver
+        return solve(Bmat, rhs);
     }
+
 
     private Fraction[] columnOfBinv(int col) {
         Fraction[] u = new Fraction[d];
@@ -316,12 +331,16 @@ final class SimplexDictionary {
     }
 
 
+    /**
+     * Solve A * x = b using full pivoting Gaussian elimination
+     * (parity with lrs_solve in lrslib).
+     */
     private static Fraction[] solve(Fraction[][] A, Fraction[] b) {
         int n = b.length;
         Fraction ZERO = b[0].subtract(b[0]);
-        Fraction[][] M = new Fraction[n][n + 1];
 
-        // build augmented matrix
+        // Build augmented matrix [A | b]
+        Fraction[][] M = new Fraction[n][n + 1];
         for (int i = 0; i < n; i++) {
             System.arraycopy(A[i], 0, M[i], 0, n);
             M[i][n] = b[i];
@@ -332,23 +351,24 @@ final class SimplexDictionary {
 
         // Gaussian elimination with full pivoting
         for (int k = 0; k < n; k++) {
-            // find pivot (max abs entry among submatrix)
+            // Find pivot (first nonzero entry in submatrix)
             int pivRow = -1, pivCol = -1;
             outer:
             for (int i = k; i < n; i++) {
                 for (int j = k; j < n; j++) {
-                    if (M[i][j].compareTo(ZERO) != 0) {
+                    if (!M[i][j].equals(ZERO)) {
                         pivRow = i; pivCol = j; break outer;
                     }
                 }
             }
             if (pivRow == -1) throw new ArithmeticException("Singular system in solve()");
 
-            // swap rows
+            // Swap rows
             if (pivRow != k) {
                 Fraction[] tmp = M[pivRow]; M[pivRow] = M[k]; M[k] = tmp;
             }
-            // swap columns (track permutation)
+
+            // Swap columns
             if (pivCol != k) {
                 for (int i = 0; i < n; i++) {
                     Fraction tmp = M[i][pivCol]; M[i][pivCol] = M[i][k]; M[i][k] = tmp;
@@ -356,14 +376,17 @@ final class SimplexDictionary {
                 int tmpIdx = colPerm[pivCol]; colPerm[pivCol] = colPerm[k]; colPerm[k] = tmpIdx;
             }
 
-            // normalize pivot row
+            // Normalize pivot row
             Fraction diag = M[k][k];
-            for (int j = k; j <= n; j++) M[k][j] = M[k][j].divide(diag);
+            for (int j = k; j <= n; j++) {
+                M[k][j] = M[k][j].divide(diag);
+            }
 
-            // eliminate others
-            for (int i = 0; i < n; i++) if (i != k) {
+            // Eliminate other rows
+            for (int i = 0; i < n; i++) {
+                if (i == k) continue;
                 Fraction f = M[i][k];
-                if (f.compareTo(ZERO) != 0) {
+                if (!f.equals(ZERO)) {
                     for (int j = k; j <= n; j++) {
                         M[i][j] = M[i][j].subtract(f.multiply(M[k][j]));
                     }
@@ -371,11 +394,14 @@ final class SimplexDictionary {
             }
         }
 
-        // extract solution with column permutation reversed
+        // Extract solution, undo column permutation
         Fraction[] x = new Fraction[n];
-        for (int i = 0; i < n; i++) x[colPerm[i]] = M[i][n];
+        for (int i = 0; i < n; i++) {
+            x[colPerm[i]] = M[i][n];
+        }
         return x;
     }
+
 
 
 
